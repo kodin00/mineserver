@@ -13,9 +13,9 @@ FROM docker:27-cli AS docker-cli
 FROM node:22-bookworm-slim
 ENV NODE_ENV=production
 WORKDIR /app
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates tar gzip \
-  && rm -rf /var/lib/apt/lists/*
+# ca-certificates ships with the node:bookworm-slim base image, and tar/gzip
+# are part of the base Debian system, so no apt-get step (which requires
+# network access at build time) is needed here.
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 COPY --from=build /app/node_modules ./node_modules
