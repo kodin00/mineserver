@@ -1,0 +1,43 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      DATA_ROOT: ${MINESERVER_DATA_ROOT:-/opt/mineserver}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-2147483648}
+      MAX_ZIP_EXPANDED_BYTES: ${MAX_ZIP_EXPANDED_BYTES:-4294967296}
+      MAX_ZIP_FILES: ${MAX_ZIP_FILES:-500}
+      TZ: ${TZ:-Asia/Jakarta}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${MINESERVER_DATA_ROOT:-/opt/mineserver}:${MINESERVER_DATA_ROOT:-/opt/mineserver}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${PANEL_PORT:-8080}:8080"

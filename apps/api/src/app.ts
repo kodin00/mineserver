@@ -1,0 +1,609 @@
+import path from "node:path";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import cookie from "@fastify/cookie";
+import multipart from "@fastify/multipart";
+import rateLimit from "@fastify/rate-limit";
+import websocket from "@fastify/websocket";
+import { hash, verify } from "@node-rs/argon2";
+import {
+  ChangePasswordSchema,
+  ConsoleCommandSchema,
+  CreateServerSchema,
+  LoginSchema,
+  ServerConfigSchema,
+  addonKind,
+  type ServerConfig,
+  type ServerSummary,
+} from "@mineserver/shared";
+import {
+  installJar,
+  installZip,
+  listAddons,
+  removeAddon,
+  setAddonEnabled,
+} from "./addons.js";
+import { listBackups, removeBackup, restoreBackup } from "./backups.js";
+import { instancePaths, writeCompose } from "./compose.js";
+import { config } from "./config.js";
+import { Store, type ServerRow } from "./db.js";
+import { ComposeManager } from "./docker.js";
+import { JobRunner } from "./jobs.js";
+import {
+  pathExists,
+  randomToken,
+  runCommand,
+  safeFilename,
+  sha256,
+  slugify,
+} from "./utils.js";
+
+const SESSION_COOKIE = "ms_session";
+const CSRF_COOKIE = "ms_csrf";
+
+interface AppContext {
+  store: Store;
+  docker: ComposeManager;
+  jobs: JobRunner;
+}
+
+declare module "fastify" {
+  interface FastifyRequest {
+    session?: { hash: string; csrf: string };
+  }
+}
+
+function rowConfig(row: ServerRow): ServerConfig {
+  return ServerConfigSchema.parse(JSON.parse(row.config_json));
+}
+
+function uniqueSlug(store: Store, name: string): string {
+  const used = new Set(store.listServers().map((row) => row.slug));
+  const base = slugify(name);
+  if (!used.has(base)) return base;
+  let suffix = 2;
+  while (used.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
+async function serverSummary(
+  row: ServerRow,
+  docker: ComposeManager,
+): Promise<ServerSummary> {
+  const runtime = await docker.status(
+    row.id,
+    instancePaths(config.instancesRoot, row.id),
+  );
+  return {
+    id: row.id,
+    slug: row.slug,
+    config: rowConfig(row),
+    revision: row.revision,
+    appliedRevision: row.applied_revision,
+    restartRequired: row.revision !== row.applied_revision,
+    state: runtime.state,
+    ...(runtime.health ? { health: runtime.health } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function authenticate(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  store: Store,
+) {
+  const token = request.cookies[SESSION_COOKIE];
+  if (!token) {
+    return reply.code(401).send({ error: "Authentication required" });
+  }
+  const tokenHash = sha256(token);
+  const session = store.getSession(tokenHash);
+  if (!session || session.expires_at < new Date().toISOString()) {
+    if (session) store.deleteSession(tokenHash);
+    return reply.code(401).send({ error: "Session expired" });
+  }
+  request.session = { hash: tokenHash, csrf: session.csrf_token };
+}
+
+function errorMessage(error: unknown): string {
+  if (error && typeof error === "object" && "issues" in error) {
+    return (error as any).issues.map((issue: any) => issue.message).join(", ");
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function fetchMetadata() {
+  const [versions, images] = await Promise.allSettled([
+    fetch(
+      "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+    ).then((res) => {
+      if (!res.ok) throw new Error("Version service unavailable");
+      return res.json();
+    }),
+    fetch(
+      "https://raw.githubusercontent.com/itzg/docker-minecraft-server/refs/heads/master/images.json",
+    ).then((res) => {
+      if (!res.ok) throw new Error("Image metadata unavailable");
+      return res.json();
+    }),
+  ]);
+  return {
+    versions:
+      versions.status === "fulfilled"
+        ? ((versions.value as any).versions?.slice(0, 100) ?? [])
+        : [],
+    imageTags: images.status === "fulfilled" ? images.value : null,
+  };
+}
+
+export async function buildApp(context: AppContext) {
+  const { store, docker, jobs } = context;
+  const app = Fastify({
+    logger: {
+      level: config.NODE_ENV === "test" ? "silent" : "info",
+    },
+    bodyLimit: 2 * 1024 * 1024,
+  });
+  await app.register(cookie);
+  await app.register(rateLimit, { global: false });
+  await app.register(multipart, {
+    limits: { fileSize: config.MAX_UPLOAD_BYTES, files: 1, fields: 2 },
+  });
+  await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
+
+  app.setErrorHandler((error, _request, reply) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const status =
+      (error as any).statusCode ?? (/not found/i.test(message) ? 404 : 400);
+    reply.code(status).send({ error: errorMessage(error) });
+  });
+
+  app.addHook("preHandler", async (request, reply) => {
+    const pathname = request.url.split("?")[0]!;
+    if (pathname === "/api/health" || pathname === "/api/auth/login") return;
+    if (!pathname.startsWith("/api/") && !pathname.startsWith("/ws/")) return;
+    const authResult = await authenticate(request, reply, store);
+    if (authResult) return authResult;
+    if (
+      !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
+      pathname.startsWith("/api/")
+    ) {
+      const token = request.headers["x-csrf-token"];
+      if (typeof token !== "string" || token !== request.session?.csrf) {
+        return reply.code(403).send({ error: "Invalid CSRF token" });
+      }
+    }
+  });
+
+  app.get("/api/health", async () => ({ status: "ok" }));
+
+  app.post(
+    "/api/auth/login",
+    { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const body = LoginSchema.parse(request.body);
+      const admin = store.getAdmin();
+      if (!admin || !(await verify(admin.password_hash, body.password))) {
+        return reply.code(401).send({ error: "Invalid password" });
+      }
+      const token = randomToken();
+      const csrf = randomToken(24);
+      const expires = new Date(
+        Date.now() + config.SESSION_TTL_HOURS * 60 * 60 * 1000,
+      );
+      store.createSession(sha256(token), csrf, expires.toISOString());
+      const cookieBase = {
+        path: "/",
+        sameSite: "strict" as const,
+        secure: config.COOKIE_SECURE,
+        expires,
+      };
+      reply.setCookie(SESSION_COOKIE, token, { ...cookieBase, httpOnly: true });
+      reply.setCookie(CSRF_COOKIE, csrf, { ...cookieBase, httpOnly: false });
+      return { authenticated: true, csrfToken: csrf };
+    },
+  );
+
+  app.get("/api/auth/me", async (request) => ({
+    authenticated: true,
+    csrfToken: request.session!.csrf,
+  }));
+
+  app.post("/api/auth/logout", async (request, reply) => {
+    if (request.session) store.deleteSession(request.session.hash);
+    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    reply.clearCookie(CSRF_COOKIE, { path: "/" });
+    return { ok: true };
+  });
+
+  app.post("/api/auth/password", async (request) => {
+    const body = ChangePasswordSchema.parse(request.body);
+    const admin = store.getAdmin();
+    if (!admin || !(await verify(admin.password_hash, body.currentPassword))) {
+      throw Object.assign(new Error("Current password is incorrect"), {
+        statusCode: 403,
+      });
+    }
+    store.updatePassword(await hash(body.newPassword));
+    return { ok: true, reloginRequired: true };
+  });
+
+  let metadataCache: { value: any; expires: number } | null = null;
+  app.get("/api/metadata", async () => {
+    if (!metadataCache || metadataCache.expires < Date.now()) {
+      metadataCache = {
+        value: await fetchMetadata(),
+        expires: Date.now() + 60 * 60_000,
+      };
+    }
+    return metadataCache.value;
+  });
+
+  app.get("/api/servers", async () =>
+    Promise.all(store.listServers().map((row) => serverSummary(row, docker))),
+  );
+
+  app.post("/api/servers", async (request, reply) => {
+    const parsed = CreateServerSchema.parse(request.body);
+    const { acceptEula: _acceptEula, ...input } = parsed;
+    const serverConfig = ServerConfigSchema.parse(input);
+    if (store.getServerByPort(serverConfig.port)) {
+      throw Object.assign(
+        new Error(`Port ${serverConfig.port} is already assigned`),
+        {
+          statusCode: 409,
+        },
+      );
+    }
+    const id = crypto.randomUUID();
+    const slug = uniqueSlug(store, serverConfig.name);
+    const paths = instancePaths(config.instancesRoot, id);
+    store.insertServer(id, slug, serverConfig);
+    try {
+      await writeCompose(id, serverConfig, paths, config.TZ);
+    } catch (error) {
+      store.deleteServer(id);
+      await rm(paths.root, { recursive: true, force: true });
+      throw error;
+    }
+    return reply
+      .code(201)
+      .send(await serverSummary(store.getServer(id)!, docker));
+  });
+
+  app.get<{ Params: { id: string } }>("/api/servers/:id", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    return serverSummary(row, docker);
+  });
+
+  app.put<{ Params: { id: string } }>("/api/servers/:id", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const serverConfig = ServerConfigSchema.parse(request.body);
+    if (store.getServerByPort(serverConfig.port, row.id)) {
+      throw Object.assign(
+        new Error(`Port ${serverConfig.port} is already assigned`),
+        {
+          statusCode: 409,
+        },
+      );
+    }
+    store.updateServer(row.id, serverConfig);
+    await writeCompose(
+      row.id,
+      serverConfig,
+      instancePaths(config.instancesRoot, row.id),
+      config.TZ,
+    );
+    return serverSummary(store.getServer(row.id)!, docker);
+  });
+
+  app.post<{
+    Params: { id: string; action: string };
+  }>("/api/servers/:id/actions/:action", async (request, reply) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const paths = instancePaths(config.instancesRoot, row.id);
+    const action = request.params.action;
+    const operation = jobs.run(row.id, action, async () => {
+      if (action === "start" || action === "apply") {
+        await docker.up(row.id, paths, row.revision !== row.applied_revision);
+        store.markApplied(row.id);
+      } else if (action === "stop") {
+        await docker.stop(row.id, paths);
+      } else if (action === "restart") {
+        if (row.revision !== row.applied_revision) {
+          await docker.up(row.id, paths, true);
+          store.markApplied(row.id);
+        } else {
+          await docker.restart(row.id, paths);
+        }
+      } else if (action === "pull") {
+        await docker.pull(row.id, paths);
+        store.markApplied(row.id);
+      } else if (action === "backup") {
+        await docker.backupNow(row.id, paths);
+      } else {
+        throw new Error("Unknown action");
+      }
+    });
+    return reply.code(202).send(operation);
+  });
+
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/stats",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      return docker.stats(row.id, instancePaths(config.instancesRoot, row.id));
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/logs",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      return {
+        logs: (
+          await docker.logs(row.id, instancePaths(config.instancesRoot, row.id))
+        ).stdout,
+      };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/console",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const body = ConsoleCommandSchema.parse(request.body);
+      const result = await docker.console(
+        row.id,
+        instancePaths(config.instancesRoot, row.id),
+        body.command,
+      );
+      return { output: result.stdout.trim() };
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/addons",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const kind = addonKind(rowConfig(row).type);
+      if (!kind) return { kind: null, files: [] };
+      return {
+        kind,
+        files: await listAddons(
+          instancePaths(config.instancesRoot, row.id).addons,
+        ),
+      };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/addons",
+    async (request, reply) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const kind = addonKind(rowConfig(row).type);
+      if (!kind)
+        throw new Error("This server type does not support managed add-ons");
+      const file = await request.file();
+      if (!file) throw new Error("Choose a JAR or ZIP file");
+      const extension = path.extname(file.filename).toLowerCase();
+      if (![".jar", ".zip"].includes(extension))
+        throw new Error("Only JAR and ZIP uploads are accepted");
+      await mkdir(config.tempRoot, { recursive: true });
+      const temp = path.join(config.tempRoot, crypto.randomUUID());
+      try {
+        await pipeline(
+          file.file,
+          createWriteStream(temp, { flags: "wx", mode: 0o600 }),
+        );
+        if (file.file.truncated)
+          throw new Error("Upload exceeds the configured size limit");
+        const directory = instancePaths(config.instancesRoot, row.id).addons;
+        const installed =
+          extension === ".jar"
+            ? [await installJar(temp, file.filename, directory)]
+            : await installZip(temp, directory);
+        store.touchServerRevision(row.id);
+        return reply.code(201).send({ installed, restartRequired: true });
+      } finally {
+        await rm(temp, { force: true });
+      }
+    },
+  );
+
+  app.patch<{
+    Params: { id: string; filename: string };
+  }>("/api/servers/:id/addons/:filename", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const enabled = Boolean((request.body as any)?.enabled);
+    await setAddonEnabled(
+      instancePaths(config.instancesRoot, row.id).addons,
+      decodeURIComponent(request.params.filename),
+      enabled,
+    );
+    store.touchServerRevision(row.id);
+    return { ok: true, restartRequired: true };
+  });
+
+  app.delete<{
+    Params: { id: string; filename: string };
+  }>("/api/servers/:id/addons/:filename", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    await removeAddon(
+      instancePaths(config.instancesRoot, row.id).addons,
+      decodeURIComponent(request.params.filename),
+    );
+    store.touchServerRevision(row.id);
+    return { ok: true, restartRequired: true };
+  });
+
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/backups",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      return listBackups(instancePaths(config.instancesRoot, row.id).backups);
+    },
+  );
+
+  app.get<{ Params: { id: string; filename: string } }>(
+    "/api/servers/:id/backups/:filename/download",
+    async (request, reply) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const filename = safeFilename(
+        decodeURIComponent(request.params.filename),
+      );
+      const target = path.join(
+        instancePaths(config.instancesRoot, row.id).backups,
+        filename,
+      );
+      if (!(await pathExists(target)))
+        throw Object.assign(new Error("Backup not found"), { statusCode: 404 });
+      const info = await stat(target);
+      reply.header("content-disposition", `attachment; filename="${filename}"`);
+      reply.header("content-length", String(info.size));
+      reply.type("application/gzip");
+      return reply.send(createReadStream(target));
+    },
+  );
+
+  app.post<{ Params: { id: string; filename: string } }>(
+    "/api/servers/:id/backups/:filename/restore",
+    async (request, reply) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const filename = decodeURIComponent(request.params.filename);
+      const paths = instancePaths(config.instancesRoot, row.id);
+      const operation = jobs.run(row.id, "restore", () =>
+        restoreBackup(row.id, filename, paths, docker),
+      );
+      return reply.code(202).send(operation);
+    },
+  );
+
+  app.delete<{ Params: { id: string; filename: string } }>(
+    "/api/servers/:id/backups/:filename",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      await removeBackup(
+        instancePaths(config.instancesRoot, row.id).backups,
+        decodeURIComponent(request.params.filename),
+      );
+      return { ok: true };
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/operations",
+    async (request) => {
+      if (!store.getServer(request.params.id))
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      return store.listOperations(request.params.id);
+    },
+  );
+
+  app.delete<{
+    Params: { id: string };
+    Querystring: { permanent?: string };
+  }>("/api/servers/:id", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const paths = instancePaths(config.instancesRoot, row.id);
+    await docker.down(row.id, paths).catch(() => undefined);
+    if (request.query.permanent === "true") {
+      await rm(paths.root, { recursive: true, force: true });
+    } else if (await pathExists(paths.root)) {
+      const archiveRoot = path.join(config.DATA_ROOT, "archived");
+      await mkdir(archiveRoot, { recursive: true });
+      await rename(
+        paths.root,
+        path.join(archiveRoot, `${row.slug}-${Date.now()}`),
+      );
+    }
+    store.deleteServer(row.id);
+    return { ok: true };
+  });
+
+  app.get("/ws/operations", { websocket: true }, (socket) => {
+    const handler = (operation: unknown) => {
+      if (socket.readyState === socket.OPEN)
+        socket.send(JSON.stringify(operation));
+    };
+    jobs.on("operation", handler);
+    socket.on("close", () => jobs.off("operation", handler));
+  });
+
+  app.get<{ Params: { id: string } }>(
+    "/ws/servers/:id/logs",
+    { websocket: true },
+    (socket, request) => {
+      const row = store.getServer(request.params.id);
+      if (!row) {
+        socket.close(1008, "Server not found");
+        return;
+      }
+      const child = docker.followLogs(
+        row.id,
+        instancePaths(config.instancesRoot, row.id),
+      );
+      const send = (chunk: Buffer) => {
+        if (socket.readyState === socket.OPEN) socket.send(chunk.toString());
+      };
+      child.stdout.on("data", send);
+      child.stderr.on("data", send);
+      child.on("close", (code) => {
+        if (socket.readyState === socket.OPEN)
+          socket.close(1000, `logs exited ${code ?? 0}`);
+      });
+      socket.on("close", () => child.kill("SIGTERM"));
+    },
+  );
+
+  return app;
+}
+
+export async function createContext(): Promise<AppContext> {
+  await Promise.all([
+    mkdir(config.DATA_ROOT, { recursive: true }),
+    mkdir(config.instancesRoot, { recursive: true }),
+    mkdir(config.tempRoot, { recursive: true }),
+  ]);
+  const store = new Store(config.databasePath);
+  if (!store.getAdmin()) store.createAdmin(await hash(config.ADMIN_PASSWORD));
+  store.pruneSessions();
+  return {
+    store,
+    docker: new ComposeManager(),
+    jobs: new JobRunner(store),
+  };
+}

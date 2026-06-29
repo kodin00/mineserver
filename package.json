@@ -1,0 +1,24 @@
+{
+  "name": "mineserver-panel",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @mineserver/shared && concurrently -n api,web -c blue,green \"npm run dev -w @mineserver/api\" \"npm run dev -w @mineserver/web\"",
+    "build": "npm run build -w @mineserver/shared && npm run build -w @mineserver/api && npm run build -w @mineserver/web",
+    "typecheck": "npm run build -w @mineserver/shared && npm run typecheck -w @mineserver/api && npm run typecheck -w @mineserver/web",
+    "test": "npm run build -w @mineserver/shared && npm run test -w @mineserver/shared && npm run test -w @mineserver/api && npm run test -w @mineserver/web",
+    "format:check": "prettier --check . --ignore-unknown"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

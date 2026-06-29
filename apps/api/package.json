@@ -1,0 +1,31 @@
+{
+  "name": "@mineserver/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/multipart": "^9.0.3",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/websocket": "^11.2.0",
+    "@mineserver/shared": "0.1.0",
+    "@node-rs/argon2": "^2.0.2",
+    "fastify": "^5.4.0",
+    "yaml": "^2.8.0",
+    "yauzl": "^3.2.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.34",
+    "@types/yauzl": "^2.10.3",
+    "tsx": "^4.20.3",
+    "vitest": "^3.2.4"
+  }
+}
