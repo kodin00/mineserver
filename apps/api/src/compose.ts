@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, chown, mkdir, writeFile } from "node:fs/promises";
 import YAML from "yaml";
 import {
   addonKind,
@@ -8,6 +8,15 @@ import {
   type ServerConfig,
 } from "@mineserver/shared";
 import { randomToken } from "./utils.js";
+
+const minecraftUid = 1000;
+const minecraftGid = 1000;
+
+async function ensureRconSecretReadableByMinecraft(pathname: string) {
+  if (process.getuid?.() !== 0) return;
+  await chown(pathname, minecraftUid, minecraftGid);
+  await chmod(pathname, 0o600);
+}
 
 export interface InstancePaths {
   root: string;
@@ -174,6 +183,7 @@ export async function ensureInstanceLayout(paths: InstancePaths) {
   } catch (error: any) {
     if (error?.code !== "EEXIST") throw error;
   }
+  await ensureRconSecretReadableByMinecraft(paths.rconSecret);
 }
 
 export async function writeCompose(
