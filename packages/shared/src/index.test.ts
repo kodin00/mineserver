@@ -25,6 +25,22 @@ describe("server config", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts http URLs for server icon overrides", () => {
+    const result = ServerConfigSchema.parse({
+      name: "Test",
+      serverIconUrl: "https://example.com/server-icon.png",
+    });
+    expect(result.serverIconUrl).toBe("https://example.com/server-icon.png");
+  });
+
+  it("rejects non-URL server icon values", () => {
+    const result = ServerConfigSchema.safeParse({
+      name: "Test",
+      serverIconUrl: "/icon.png",
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("selects type-aware addon directories", () => {
     expect(addonKind("PAPER")).toBe("plugins");
     expect(addonKind("FORGE")).toBe("mods");

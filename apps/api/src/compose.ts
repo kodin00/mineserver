@@ -77,6 +77,10 @@ export function environmentFor(config: ServerConfig): Record<string, string> {
     ENABLE_RCON: "TRUE",
     RCON_PASSWORD_FILE: "/run/secrets/rcon_password",
   };
+  if (config.serverIconUrl) {
+    environment.ICON = config.serverIconUrl;
+    environment.OVERRIDE_ICON = "TRUE";
+  }
   if (config.seed) environment.SEED = config.seed;
   if (config.whitelist.length) {
     environment.ENABLE_WHITELIST = "TRUE";

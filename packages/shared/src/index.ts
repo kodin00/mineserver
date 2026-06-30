@@ -32,6 +32,14 @@ const safeEnvKey = z
 const propertyKey = z
   .string()
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "Invalid server property name");
+const serverIconUrlSchema = z
+  .string()
+  .trim()
+  .url("Use a valid URL such as https://example.com/server-icon.png")
+  .max(500)
+  .refine((value) => /^https?:\/\//i.test(value), {
+    message: "Server icon URL must start with http:// or https://",
+  });
 
 export const BackupSettingsSchema = z.object({
   enabled: z.boolean().default(true),
@@ -47,6 +55,7 @@ export const ServerConfigSchema = z
     version: z.string().trim().min(1).max(40).default("LATEST"),
     type: ServerTypeSchema.default("PAPER"),
     port: z.coerce.number().int().min(1024).max(65535).default(25565),
+    serverIconUrl: serverIconUrlSchema.nullable().default(null),
     javaTag: z.string().trim().max(64).nullable().default(null),
     initMemory: memorySchema.default("1G"),
     maxMemory: memorySchema.default("4G"),
@@ -188,6 +197,8 @@ export const reservedEnvironmentKeys = new Set([
   "INIT_MEMORY",
   "MAX_MEMORY",
   "MEMORY",
+  "ICON",
+  "OVERRIDE_ICON",
   "CUSTOM_SERVER_PROPERTIES",
 ]);
 

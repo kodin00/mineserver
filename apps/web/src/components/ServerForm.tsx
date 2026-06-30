@@ -14,6 +14,7 @@ export const defaultServerConfig: ServerConfig = ServerConfigSchema.parse({
   type: "PAPER",
   version: "LATEST",
   port: 25565,
+  serverIconUrl: null,
   initMemory: "1G",
   maxMemory: "4G",
 });
@@ -147,6 +148,19 @@ export function ServerForm({
               value={value.port}
               onChange={(event) => set("port", Number(event.target.value))}
             />
+          </label>
+          <label>
+            Server icon URL
+            <input
+              value={value.serverIconUrl ?? ""}
+              onChange={(event) =>
+                set("serverIconUrl", event.target.value || null)
+              }
+              placeholder="https://example.com/server-icon.png"
+            />
+            <small>
+              Optional picture shown in the Minecraft multiplayer server list.
+            </small>
           </label>
           <label>
             Java image override

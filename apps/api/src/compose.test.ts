@@ -27,4 +27,13 @@ describe("compose generation", () => {
     expect(output).toContain("RCON_PASSWORD_FILE");
     expect(output).toContain("mem_limit: 5120M");
   });
+
+  it("passes server icon URLs to the Minecraft container", () => {
+    const environment = environmentFor({
+      ...base,
+      serverIconUrl: "https://example.com/server-icon.png",
+    });
+    expect(environment.ICON).toBe("https://example.com/server-icon.png");
+    expect(environment.OVERRIDE_ICON).toBe("TRUE");
+  });
 });
