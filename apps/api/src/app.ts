@@ -1,6 +1,6 @@
 import path from "node:path";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
@@ -19,22 +19,35 @@ import {
   type ServerSummary,
 } from "@mineserver/shared";
 import {
+  addonFilePath,
+  createAddonsArchive,
   installJar,
   installZip,
   listAddons,
   removeAddon,
   setAddonEnabled,
 } from "./addons.js";
-import { listBackups, removeBackup, restoreBackup } from "./backups.js";
+import {
+  createBackup,
+  listBackups,
+  removeBackup,
+  restoreBackup,
+} from "./backups.js";
+import { BackupScheduler } from "./backup-scheduler.js";
 import { instancePaths, writeCompose } from "./compose.js";
 import { config } from "./config.js";
 import { Store, type ServerRow } from "./db.js";
 import { ComposeManager } from "./docker.js";
 import { JobRunner } from "./jobs.js";
 import {
+  listServerFiles,
+  readServerFile,
+  searchServerFiles,
+  writeServerFile,
+} from "./files.js";
+import {
   pathExists,
   randomToken,
-  runCommand,
   safeFilename,
   sha256,
   slugify,
@@ -153,6 +166,9 @@ export async function buildApp(context: AppContext) {
     limits: { fileSize: config.MAX_UPLOAD_BYTES, files: 1, fields: 2 },
   });
   await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
+  const backupScheduler = new BackupScheduler(store, docker, jobs);
+  if (config.NODE_ENV !== "test") backupScheduler.start();
+  app.addHook("onClose", async () => backupScheduler.stop());
 
   app.setErrorHandler((error, _request, reply) => {
     const message = error instanceof Error ? error.message : String(error);
@@ -263,7 +279,7 @@ export async function buildApp(context: AppContext) {
     const paths = instancePaths(config.instancesRoot, id);
     store.insertServer(id, slug, serverConfig);
     try {
-      await writeCompose(id, serverConfig, paths, config.TZ);
+      await writeCompose(id, serverConfig, paths);
     } catch (error) {
       store.deleteServer(id);
       await rm(paths.root, { recursive: true, force: true });
@@ -299,7 +315,6 @@ export async function buildApp(context: AppContext) {
       row.id,
       serverConfig,
       instancePaths(config.instancesRoot, row.id),
-      config.TZ,
     );
     return serverSummary(store.getServer(row.id)!, docker);
   });
@@ -316,20 +331,23 @@ export async function buildApp(context: AppContext) {
       if (action === "start" || action === "apply") {
         await docker.up(row.id, paths, row.revision !== row.applied_revision);
         store.markApplied(row.id);
+        await rm(paths.backupMigrationMarker, { force: true });
       } else if (action === "stop") {
         await docker.stop(row.id, paths);
       } else if (action === "restart") {
         if (row.revision !== row.applied_revision) {
           await docker.up(row.id, paths, true);
           store.markApplied(row.id);
+          await rm(paths.backupMigrationMarker, { force: true });
         } else {
           await docker.restart(row.id, paths);
         }
       } else if (action === "pull") {
         await docker.pull(row.id, paths);
         store.markApplied(row.id);
+        await rm(paths.backupMigrationMarker, { force: true });
       } else if (action === "backup") {
-        await docker.backupNow(row.id, paths);
+        await createBackup(row.id, paths, docker, rowConfig(row).backups);
       } else {
         throw new Error("Unknown action");
       }
@@ -430,6 +448,54 @@ export async function buildApp(context: AppContext) {
     },
   );
 
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/addons/download-all",
+    async (request, reply) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), {
+          statusCode: 404,
+        });
+      const kind = addonKind(rowConfig(row).type);
+      if (!kind)
+        throw new Error("This server type does not support managed add-ons");
+      const directory = instancePaths(config.instancesRoot, row.id).addons;
+      const archive = await createAddonsArchive(directory);
+      reply.header(
+        "content-disposition",
+        `attachment; filename*=UTF-8''${encodeURIComponent(`${row.slug}-${kind}.zip`)}`,
+      );
+      reply.type("application/zip");
+      return reply.send(archive);
+    },
+  );
+
+  app.get<{ Params: { id: string; filename: string } }>(
+    "/api/servers/:id/addons/:filename/download",
+    async (request, reply) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), {
+          statusCode: 404,
+        });
+      const filename = safeFilename(
+        decodeURIComponent(request.params.filename),
+      );
+      const target = await addonFilePath(
+        instancePaths(config.instancesRoot, row.id).addons,
+        filename,
+      );
+      const info = await stat(target);
+      reply.header(
+        "content-disposition",
+        `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      );
+      reply.header("content-length", String(info.size));
+      reply.type("application/java-archive");
+      return reply.send(createReadStream(target));
+    },
+  );
+
   app.patch<{
     Params: { id: string; filename: string };
   }>("/api/servers/:id/addons/:filename", async (request) => {
@@ -486,9 +552,16 @@ export async function buildApp(context: AppContext) {
       if (!(await pathExists(target)))
         throw Object.assign(new Error("Backup not found"), { statusCode: 404 });
       const info = await stat(target);
-      reply.header("content-disposition", `attachment; filename="${filename}"`);
+      reply.header(
+        "content-disposition",
+        `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      );
       reply.header("content-length", String(info.size));
-      reply.type("application/gzip");
+      reply.type(
+        filename.toLowerCase().endsWith(".zip")
+          ? "application/zip"
+          : "application/gzip",
+      );
       return reply.send(createReadStream(target));
     },
   );
@@ -521,6 +594,78 @@ export async function buildApp(context: AppContext) {
       return { ok: true };
     },
   );
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { path?: string };
+  }>("/api/servers/:id/files", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    return listServerFiles(
+      instancePaths(config.instancesRoot, row.id).data,
+      request.query.path ?? "",
+    );
+  });
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { q?: string };
+  }>("/api/servers/:id/files/search", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const query = request.query.q?.trim() ?? "";
+    if (!query || query.length > 200) throw new Error("Invalid search query");
+    return searchServerFiles(
+      instancePaths(config.instancesRoot, row.id).data,
+      query,
+    );
+  });
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { path?: string };
+  }>("/api/servers/:id/files/content", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    if (!request.query.path) throw new Error("File path is required");
+    return readServerFile(
+      instancePaths(config.instancesRoot, row.id).data,
+      request.query.path,
+      config.MAX_EDIT_FILE_BYTES,
+    );
+  });
+
+  app.put<{
+    Params: { id: string };
+    Body: {
+      path?: string;
+      content?: string;
+      expectedModifiedAt?: string;
+    };
+  }>("/api/servers/:id/files/content", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const { path: filePath, content, expectedModifiedAt } = request.body ?? {};
+    if (
+      typeof filePath !== "string" ||
+      typeof content !== "string" ||
+      (expectedModifiedAt !== undefined &&
+        typeof expectedModifiedAt !== "string")
+    ) {
+      throw new Error("Invalid file update");
+    }
+    return writeServerFile(
+      instancePaths(config.instancesRoot, row.id).data,
+      filePath,
+      content,
+      expectedModifiedAt,
+      config.MAX_EDIT_FILE_BYTES,
+    );
+  });
 
   app.get<{ Params: { id: string } }>(
     "/api/servers/:id/operations",
@@ -601,9 +746,19 @@ export async function createContext(): Promise<AppContext> {
   const store = new Store(config.databasePath);
   if (!store.getAdmin()) store.createAdmin(await hash(config.ADMIN_PASSWORD));
   store.pruneSessions();
-  return {
-    store,
-    docker: new ComposeManager(),
-    jobs: new JobRunner(store),
-  };
+  for (const row of store.listServers()) {
+    const paths = instancePaths(config.instancesRoot, row.id);
+    if (
+      (await pathExists(paths.compose)) &&
+      (await readFile(paths.compose, "utf8")).includes("itzg/mc-backup")
+    ) {
+      store.touchServerRevision(row.id);
+      await writeFile(paths.backupMigrationMarker, "apply required\n", {
+        mode: 0o600,
+      });
+      await writeCompose(row.id, rowConfig(row), paths);
+    }
+  }
+  const docker = new ComposeManager();
+  return { store, docker, jobs: new JobRunner(store) };
 }

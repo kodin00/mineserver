@@ -1,6 +1,6 @@
 # Mineserver Panel
 
-A self-hosted React and TypeScript control panel for multiple isolated Minecraft Java servers. It generates one Docker Compose project per server using `itzg/minecraft-server`, keeps world data on the host, provides live logs and RCON commands, manages JAR/ZIP add-ons, and schedules consistent `itzg/mc-backup` archives.
+A self-hosted React and TypeScript control panel for multiple isolated Minecraft Java servers. It generates one Docker Compose project per server using `itzg/minecraft-server`, keeps world data on the host, provides live logs and RCON commands, manages JAR/ZIP add-ons, and creates consistent ZIP backups.
 
 ## Requirements
 
@@ -62,10 +62,18 @@ Deleting a server archives this directory by default. Permanent deletion require
 - Automatic Java tag selection with a per-server override
 - Explicit apply/restart for saved configuration changes
 - Paper plugins and mod-loader mods as individual JARs or safe bulk ZIPs
-- Manual and cron-scheduled backups with count/day retention
+- File explorer with recursive search and an atomic, conflict-aware text editor
+- Individual JAR downloads, bulk add-on ZIP downloads, and name/date sorting
+- Manual and cron-scheduled ZIP backups with count/day retention
 - Restore into staging, pre-restore safety archive, health check, and automatic rollback
 
 ZIP uploads accept only JAR entries. Absolute paths, traversal paths, duplicate names, non-JAR content, oversized expansion, and collisions with installed add-ons are rejected.
+
+The file editor is restricted to UTF-8 configuration and text formats under a server's `data/` directory. Symbolic links and path traversal are rejected, files are size-limited by `MAX_EDIT_FILE_BYTES`, and concurrent on-disk changes must be reloaded before saving.
+
+New backups use `.zip`. Existing `.tgz` and `.tar.gz` backups remain visible, downloadable, and restorable for migration compatibility.
+
+After upgrading an existing installation, the panel rewrites legacy generated Compose files and marks those servers as awaiting apply. Apply or restart each server once to remove its old backup sidecar before relying on the new ZIP schedule.
 
 ## Verification
 

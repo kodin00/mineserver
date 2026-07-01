@@ -15,6 +15,7 @@ services:
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-2147483648}
       MAX_ZIP_EXPANDED_BYTES: ${MAX_ZIP_EXPANDED_BYTES:-4294967296}
       MAX_ZIP_FILES: ${MAX_ZIP_FILES:-500}
+      MAX_EDIT_FILE_BYTES: ${MAX_EDIT_FILE_BYTES:-1048576}
       TZ: ${TZ:-Asia/Jakarta}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

@@ -24,6 +24,7 @@ export interface InstancePaths {
   data: string;
   addons: string;
   backups: string;
+  backupMigrationMarker: string;
   secrets: string;
   rconSecret: string;
 }
@@ -39,6 +40,7 @@ export function instancePaths(
     data: path.join(root, "data"),
     addons: path.join(root, "addons"),
     backups: path.join(root, "backups"),
+    backupMigrationMarker: path.join(root, ".zip-backup-migration-pending"),
     secrets: path.join(root, "secrets"),
     rconSecret: path.join(root, "secrets", "rcon_password"),
   };
@@ -101,29 +103,11 @@ export function renderCompose(
   id: string,
   config: ServerConfig,
   paths: InstancePaths,
-  timezone: string,
 ): string {
   const kind = addonKind(config.type);
   const memoryLimit = containerMemoryLimit(config.maxMemory);
   const volumes = [`${paths.data}:/data`];
   if (kind) volumes.push(`${paths.addons}:/${kind}:ro`);
-
-  const backupEnvironment: Record<string, string> = {
-    RCON_HOST: "mc",
-    RCON_PASSWORD_FILE: "/run/secrets/rcon_password",
-    BACKUP_NAME: id,
-    BACKUP_METHOD: "tar",
-    INITIAL_DELAY: "0",
-    PRUNE_BACKUPS_DAYS: String(config.backups.retainDays),
-    PRUNE_BACKUPS_COUNT: String(config.backups.retainCount),
-    TZ: timezone,
-  };
-  if (config.backups.enabled)
-    backupEnvironment.CRON_SCHEDULE = config.backups.cron;
-  else {
-    backupEnvironment.BACKUP_INTERVAL = "87600h";
-    backupEnvironment.BACKUP_ON_STARTUP = "false";
-  }
 
   const document = {
     name: `mineserver-${id}`,
@@ -145,20 +129,6 @@ export function renderCompose(
           retries: 12,
           start_period: "60s",
         },
-        labels: {
-          "app.mineserver.managed": "true",
-          "app.mineserver.instance": id,
-        },
-      },
-      backups: {
-        image: "itzg/mc-backup:latest",
-        restart: "unless-stopped",
-        depends_on: {
-          mc: { condition: "service_healthy" },
-        },
-        environment: backupEnvironment,
-        volumes: [`${paths.data}:/data:ro`, `${paths.backups}:/backups`],
-        secrets: ["rcon_password"],
         labels: {
           "app.mineserver.managed": "true",
           "app.mineserver.instance": id,
@@ -194,10 +164,9 @@ export async function writeCompose(
   id: string,
   config: ServerConfig,
   paths: InstancePaths,
-  timezone: string,
 ) {
   await ensureInstanceLayout(paths);
-  await writeFile(paths.compose, renderCompose(id, config, paths, timezone), {
+  await writeFile(paths.compose, renderCompose(id, config, paths), {
     mode: 0o600,
   });
 }

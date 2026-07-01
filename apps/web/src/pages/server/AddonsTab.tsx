@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
+  Download,
   FileArchive,
   FileUp,
   LoaderCircle,
@@ -16,6 +18,7 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
   const [files, setFiles] = useState<AddonFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [sort, setSort] = useState<"alphabetical" | "newest">("alphabetical");
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const load = useCallback(async () => {
@@ -35,6 +38,15 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
     }
   }, [server.id]);
   useEffect(() => void load(), [load]);
+  const sortedFiles = useMemo(
+    () =>
+      [...files].sort((a, b) =>
+        sort === "alphabetical"
+          ? a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+          : b.modifiedAt.localeCompare(a.modifiedAt),
+      ),
+    [files, sort],
+  );
 
   async function upload(file: File) {
     setUploading(true);
@@ -114,27 +126,50 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
             after restart.
           </p>
         </div>
-        <input
-          ref={input}
-          hidden
-          type="file"
-          accept=".jar,.zip"
-          onChange={(event) =>
-            event.target.files?.[0] && void upload(event.target.files[0])
-          }
-        />
-        <button
-          className="button primary"
-          disabled={uploading}
-          onClick={() => input.current?.click()}
-        >
-          {uploading ? (
-            <LoaderCircle className="spin" size={17} />
-          ) : (
-            <FileUp size={17} />
+        <div className="addon-actions">
+          <label>
+            <span className="sr-only">Sort add-ons</span>
+            <select
+              value={sort}
+              onChange={(event) =>
+                setSort(event.target.value as "alphabetical" | "newest")
+              }
+              aria-label="Sort add-ons"
+            >
+              <option value="alphabetical">Alphabetical</option>
+              <option value="newest">Date added</option>
+            </select>
+          </label>
+          {files.length > 0 && (
+            <a
+              className="button ghost"
+              href={`/api/servers/${server.id}/addons/download-all`}
+            >
+              <Archive size={17} /> Download all
+            </a>
           )}
-          Upload JAR or ZIP
-        </button>
+          <input
+            ref={input}
+            hidden
+            type="file"
+            accept=".jar,.zip"
+            onChange={(event) =>
+              event.target.files?.[0] && void upload(event.target.files[0])
+            }
+          />
+          <button
+            className="button primary"
+            disabled={uploading}
+            onClick={() => input.current?.click()}
+          >
+            {uploading ? (
+              <LoaderCircle className="spin" size={17} />
+            ) : (
+              <FileUp size={17} />
+            )}
+            Upload JAR or ZIP
+          </button>
+        </div>
       </div>
       <div className="panel file-panel">
         {files.length === 0 ? (
@@ -147,7 +182,7 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
           </div>
         ) : (
           <div className="file-list">
-            {files.map((file) => (
+            {sortedFiles.map((file) => (
               <div
                 className={`file-row ${file.enabled ? "" : "disabled"}`}
                 key={file.name}
@@ -167,6 +202,13 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
                 >
                   {file.enabled ? "Enabled" : "Disabled"}
                 </span>
+                <a
+                  className="icon-button"
+                  title={`Download ${file.name}`}
+                  href={`/api/servers/${server.id}/addons/${encodeURIComponent(file.name)}/download`}
+                >
+                  <Download size={17} />
+                </a>
                 <button
                   className="icon-button"
                   title={file.enabled ? "Disable" : "Enable"}

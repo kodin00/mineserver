@@ -68,15 +68,6 @@ export class ComposeManager {
     );
   }
 
-  backupNow(id: string, paths: InstancePaths) {
-    return this.run(
-      id,
-      paths,
-      ["exec", "-T", "backups", "backup", "now"],
-      60 * 60_000,
-    );
-  }
-
   logs(id: string, paths: InstancePaths, tail = 200) {
     return this.run(
       id,

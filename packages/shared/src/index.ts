@@ -175,6 +175,22 @@ export interface BackupFile {
   createdAt: string;
 }
 
+export interface ServerFileEntry {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  size: number | null;
+  modifiedAt: string;
+  editable: boolean;
+}
+
+export interface ServerFileDocument {
+  path: string;
+  content: string;
+  size: number;
+  modifiedAt: string;
+}
+
 export interface Operation {
   id: string;
   serverId: string | null;

@@ -3,6 +3,7 @@ import { createWriteStream } from "node:fs";
 import { mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
+import { ZipArchive } from "archiver";
 import type { AddonFile } from "@mineserver/shared";
 import { config } from "./config.js";
 import { pathExists, safeFilename } from "./utils.js";
@@ -184,6 +185,36 @@ export async function setAddonEnabled(
   if (!(await pathExists(from)))
     throw new Error("Add-on not found or already in requested state");
   await rename(from, to);
+}
+
+export async function addonFilePath(
+  directory: string,
+  filename: string,
+): Promise<string> {
+  const safe = safeFilename(filename);
+  if (!safe.toLowerCase().endsWith(".jar"))
+    throw new Error("Invalid add-on file");
+  const enabled = path.join(directory, safe);
+  const disabled = path.join(directory, `${safe}.disabled`);
+  if (await pathExists(enabled)) return enabled;
+  if (await pathExists(disabled)) return disabled;
+  throw new Error("Add-on not found");
+}
+
+export async function createAddonsArchive(directory: string) {
+  const files = await listAddons(directory);
+  if (files.length === 0) throw new Error("No add-ons to download");
+  const archive = new ZipArchive({ zlib: { level: 6 } });
+  archive.on("warning", (error) => {
+    if (error.code !== "ENOENT") archive.destroy(error);
+  });
+  for (const file of files) {
+    archive.file(await addonFilePath(directory, file.name), {
+      name: file.name,
+    });
+  }
+  void archive.finalize().catch((error) => archive.destroy(error));
+  return archive;
 }
 
 export async function createTempUpload(tempRoot: string): Promise<{

@@ -25,6 +25,11 @@ const EnvSchema = z.object({
     .positive()
     .default(4 * 1024 * 1024 * 1024),
   MAX_ZIP_FILES: z.coerce.number().int().positive().default(500),
+  MAX_EDIT_FILE_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1024 * 1024),
   DOCKER_BIN: z.string().default("docker"),
   TZ: z.string().default("Asia/Jakarta"),
 });

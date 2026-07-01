@@ -21,11 +21,12 @@ describe("compose generation", () => {
 
   it("mounts Paper uploads as plugins and does not expose RCON", () => {
     const paths = instancePaths("/opt/mineserver/instances", "abc");
-    const output = renderCompose("abc", base, paths, "UTC");
+    const output = renderCompose("abc", base, paths);
     expect(output).toContain(`${path.join(paths.root, "addons")}:/plugins:ro`);
     expect(output).not.toContain("25575:");
     expect(output).toContain("RCON_PASSWORD_FILE");
     expect(output).toContain("mem_limit: 5120M");
+    expect(output).not.toContain("itzg/mc-backup");
   });
 
   it("passes server icon URLs to the Minecraft container", () => {

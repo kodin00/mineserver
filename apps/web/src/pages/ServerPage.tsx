@@ -4,6 +4,7 @@ import {
   Blocks,
   Boxes,
   DatabaseBackup,
+  FolderTree,
   LayoutDashboard,
   RefreshCw,
   Settings,
@@ -18,11 +19,13 @@ import { ConsoleTab } from "./server/ConsoleTab";
 import { AddonsTab } from "./server/AddonsTab";
 import { BackupsTab } from "./server/BackupsTab";
 import { SettingsTab } from "./server/SettingsTab";
+import { FilesTab } from "./server/FilesTab";
 
 const tabs = [
   ["overview", "Overview", LayoutDashboard],
   ["console", "Console", SquareTerminal],
   ["addons", "Add-ons", Boxes],
+  ["files", "Files", FolderTree],
   ["backups", "Backups", DatabaseBackup],
   ["settings", "Settings", Settings],
 ] as const;
@@ -99,6 +102,7 @@ export function ServerPage() {
       {tab === "overview" && <OverviewTab server={server} refresh={load} />}
       {tab === "console" && <ConsoleTab server={server} />}
       {tab === "addons" && <AddonsTab server={server} />}
+      {tab === "files" && <FilesTab server={server} />}
       {tab === "backups" && <BackupsTab server={server} refreshServer={load} />}
       {tab === "settings" && <SettingsTab server={server} refresh={load} />}
     </Layout>

@@ -61,6 +61,17 @@ code,
 .spin {
   animation: spin 0.9s linear infinite;
 }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -810,6 +821,21 @@ label small {
   justify-content: space-between;
   gap: 20px;
 }
+.addon-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.addon-actions label {
+  width: 145px;
+}
+.addon-actions select {
+  min-height: 40px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
 .file-panel {
   padding-top: 8px;
   padding-bottom: 8px;
@@ -826,6 +852,222 @@ label small {
 }
 .file-row.disabled {
   opacity: 0.6;
+}
+.files-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.file-search {
+  width: min(320px, 100%);
+}
+.file-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.5fr);
+  min-height: 590px;
+  gap: 16px;
+}
+.explorer-panel {
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.explorer-heading {
+  min-height: 52px;
+  padding: 8px 9px 8px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  color: #819086;
+}
+.breadcrumbs span {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.breadcrumbs button {
+  border: 0;
+  color: #afbeb2;
+  background: transparent;
+  cursor: pointer;
+  padding: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.breadcrumbs button:hover {
+  color: var(--green);
+}
+.explorer-list {
+  max-height: 536px;
+  overflow: auto;
+}
+.explorer-row {
+  width: 100%;
+  min-height: 54px;
+  padding: 9px 13px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.explorer-row:hover,
+.explorer-row.selected {
+  background: var(--surface-2);
+}
+.explorer-row.selected {
+  box-shadow: inset 2px 0 var(--green);
+}
+.explorer-row:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+.explorer-row > span:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+.explorer-row strong,
+.explorer-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explorer-row strong {
+  font-size: 11px;
+}
+.explorer-row small {
+  color: var(--muted);
+  margin-top: 3px;
+  font-size: 9px;
+}
+.explorer-icon {
+  color: #86c891;
+  display: grid;
+  place-items: center;
+}
+.explorer-empty {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #6e7d72;
+  font-size: 11px;
+}
+.editor-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #243029;
+  background: #090d0a;
+  border-radius: 13px;
+  display: flex;
+  flex-direction: column;
+}
+.editor-toolbar {
+  min-height: 58px;
+  padding: 9px 11px 9px 16px;
+  border-bottom: 1px solid #202b23;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.editor-toolbar > div {
+  flex: 1;
+  min-width: 0;
+}
+.editor-toolbar strong,
+.editor-toolbar small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-toolbar strong {
+  font-size: 12px;
+}
+.editor-toolbar small {
+  margin-top: 3px;
+  color: #66756a;
+  font-size: 9px;
+}
+.saved-state,
+.unsaved-state {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 5px 8px;
+  border-radius: 9px;
+}
+.saved-state {
+  color: #73c780;
+  background: #16321d;
+}
+.unsaved-state {
+  color: #e6bd70;
+  background: #332915;
+}
+.file-editor {
+  flex: 1;
+  min-height: 480px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none !important;
+  padding: 18px;
+  resize: none;
+  font-size: 11px;
+  line-height: 1.65;
+  tab-size: 2;
+}
+.editor-status {
+  min-height: 31px;
+  border-top: 1px solid #202b23;
+  padding: 8px 14px;
+  color: #627067;
+  font:
+    9px "DM Mono",
+    monospace;
+  text-align: right;
+}
+.editor-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+}
+.editor-empty > span {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--green);
+  background: #15271a;
+}
+.editor-empty strong {
+  margin-top: 16px;
+  font-size: 13px;
+}
+.editor-empty p {
+  max-width: 340px;
+  line-height: 1.6;
 }
 .enabled-pill,
 .disabled-pill {
@@ -904,6 +1146,12 @@ label small {
     grid-template-columns: 1fr;
     gap: 20px;
   }
+  .file-workspace {
+    grid-template-columns: 1fr;
+  }
+  .explorer-list {
+    max-height: 360px;
+  }
 }
 @media (max-width: 620px) {
   .page {
@@ -928,9 +1176,14 @@ label small {
     grid-column: span 1;
   }
   .action-bar,
-  .upload-panel {
+  .upload-panel,
+  .files-toolbar {
     flex-direction: column;
     align-items: flex-start;
+  }
+  .addon-actions,
+  .addon-actions label {
+    width: 100%;
   }
   .button-row {
     width: 100%;
