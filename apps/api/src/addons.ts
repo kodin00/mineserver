@@ -1,12 +1,36 @@
 import path from "node:path";
 import { createWriteStream } from "node:fs";
-import { mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  open,
+  readdir,
+  rename,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 import { ZipArchive } from "archiver";
 import type { AddonFile } from "@mineserver/shared";
 import { config } from "./config.js";
 import { pathExists, safeFilename } from "./utils.js";
+
+const containerReadableMode = 0o644;
+
+export async function ensureAddonsReadable(directory: string) {
+  await mkdir(directory, { recursive: true });
+  const entries = await readdir(directory, { withFileTypes: true });
+  await Promise.all(
+    entries
+      .filter(
+        (entry) => entry.isFile() && /\.jar(?:\.disabled)?$/i.test(entry.name),
+      )
+      .map((entry) =>
+        chmod(path.join(directory, entry.name), containerReadableMode),
+      ),
+  );
+}
 
 export async function listAddons(directory: string): Promise<AddonFile[]> {
   await mkdir(directory, { recursive: true });
@@ -42,6 +66,12 @@ export async function installJar(
     throw new Error(`An add-on named ${filename} already exists`);
   }
   await rename(tempPath, target);
+  try {
+    await chmod(target, containerReadableMode);
+  } catch (error) {
+    await rm(target, { force: true });
+    throw error;
+  }
   return filename;
 }
 
@@ -156,7 +186,10 @@ export async function installZip(
           const target = path.join(staging, leaf);
           await pipeline(
             stream,
-            createWriteStream(target, { flags: "wx", mode: 0o644 }),
+            createWriteStream(target, {
+              flags: "wx",
+              mode: containerReadableMode,
+            }),
           );
           extracted.push(leaf);
           zip.readEntry();

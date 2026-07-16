@@ -23,6 +23,7 @@ import {
   addonFilePath,
   createAddonsArchive,
   createTempUpload,
+  ensureAddonsReadable,
   installAddonBatch,
   listAddons,
   removeAddon,
@@ -423,6 +424,11 @@ export async function buildApp(context: AppContext) {
     const paths = instancePaths(config.instancesRoot, row.id);
     const action = request.params.action;
     const operation = jobs.run(row.id, action, async () => {
+      if (
+        ["run", "start", "rebuild", "apply", "restart", "pull"].includes(action)
+      ) {
+        await ensureAddonsReadable(paths.addons);
+      }
       if (action === "run" || action === "start") {
         const runtime = await docker.status(row.id, paths);
         await docker.startExisting(row.id, paths);

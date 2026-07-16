@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { ServerConfigSchema } from "@mineserver/shared";
@@ -87,6 +87,11 @@ describe("server lifecycle actions", () => {
     };
     store.markApplied(serverId);
     store.touchServerRevision(serverId);
+    const existingAddon = path.join(
+      instancePaths(config.instancesRoot, serverId).addons,
+      "example-mod.jar",
+    );
+    await chmod(existingAddon, 0o600);
 
     const run = await app.inject({
       method: "POST",
@@ -102,6 +107,7 @@ describe("server lifecycle actions", () => {
       )
       .toBe("succeeded");
     expect(store.getServer(serverId)?.applied_revision).toBe(1);
+    expect((await stat(existingAddon)).mode & 0o777).toBe(0o644);
 
     const rebuild = await app.inject({
       method: "POST",
@@ -222,6 +228,16 @@ describe("multiple add-on uploads", () => {
       installed: ["alpha.jar", "beta.jar"],
       restartRequired: true,
     });
+    const addonsDirectory = instancePaths(
+      config.instancesRoot,
+      serverId,
+    ).addons;
+    expect(
+      (await stat(path.join(addonsDirectory, "alpha.jar"))).mode & 0o777,
+    ).toBe(0o644);
+    expect(
+      (await stat(path.join(addonsDirectory, "beta.jar"))).mode & 0o777,
+    ).toBe(0o644);
 
     const second = multipart([
       { name: "gamma.jar", contents: "gamma" },
