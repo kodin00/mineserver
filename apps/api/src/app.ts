@@ -1,7 +1,8 @@
 import path from "node:path";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
+import { Transform } from "node:stream";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
@@ -21,8 +22,8 @@ import {
 import {
   addonFilePath,
   createAddonsArchive,
-  installJar,
-  installZip,
+  createTempUpload,
+  installAddonBatch,
   listAddons,
   removeAddon,
   setAddonEnabled,
@@ -164,7 +165,11 @@ export async function buildApp(context: AppContext) {
   await app.register(cookie);
   await app.register(rateLimit, { global: false });
   await app.register(multipart, {
-    limits: { fileSize: config.MAX_UPLOAD_BYTES, files: 1, fields: 2 },
+    limits: {
+      fileSize: config.MAX_UPLOAD_BYTES,
+      files: config.MAX_UPLOAD_FILES,
+      fields: 2,
+    },
   });
   await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
   const backupScheduler = new BackupScheduler(store, docker, jobs);
@@ -514,29 +519,51 @@ export async function buildApp(context: AppContext) {
       const kind = addonKind(rowConfig(row).type);
       if (!kind)
         throw new Error("This server type does not support managed add-ons");
-      const file = await request.file();
-      if (!file) throw new Error("Choose a JAR or ZIP file");
-      const extension = path.extname(file.filename).toLowerCase();
-      if (![".jar", ".zip"].includes(extension))
-        throw new Error("Only JAR and ZIP uploads are accepted");
-      await mkdir(config.tempRoot, { recursive: true });
-      const temp = path.join(config.tempRoot, crypto.randomUUID());
+      const uploads: Array<{ path: string; originalName: string }> = [];
+      let totalBytes = 0;
       try {
-        await pipeline(
-          file.file,
-          createWriteStream(temp, { flags: "wx", mode: 0o600 }),
+        for await (const file of request.files()) {
+          const temp = await createTempUpload(config.tempRoot);
+          uploads.push({ path: temp.path, originalName: file.filename });
+          const enforceTotalLimit = new Transform({
+            transform(chunk, _encoding, callback) {
+              totalBytes += chunk.length;
+              if (totalBytes > config.MAX_UPLOAD_BYTES) {
+                callback(
+                  Object.assign(
+                    new Error("Upload exceeds the configured size limit"),
+                    { statusCode: 413 },
+                  ),
+                );
+              } else {
+                callback(null, chunk);
+              }
+            },
+          });
+          await pipeline(file.file, enforceTotalLimit, temp.stream);
+          if (file.file.truncated)
+            throw new Error("Upload exceeds the configured size limit");
+        }
+        if (uploads.length === 0)
+          throw new Error("Choose one or more JAR or ZIP files");
+        const invalid = uploads.find(
+          (upload) =>
+            ![".jar", ".zip"].includes(
+              path.extname(upload.originalName).toLowerCase(),
+            ),
         );
-        if (file.file.truncated)
-          throw new Error("Upload exceeds the configured size limit");
+        if (invalid)
+          throw new Error(
+            `Only JAR and ZIP uploads are accepted: ${invalid.originalName}`,
+          );
         const directory = instancePaths(config.instancesRoot, row.id).addons;
-        const installed =
-          extension === ".jar"
-            ? [await installJar(temp, file.filename, directory)]
-            : await installZip(temp, directory);
+        const installed = await installAddonBatch(uploads, directory);
         store.touchServerRevision(row.id);
         return reply.code(201).send({ installed, restartRequired: true });
       } finally {
-        await rm(temp, { force: true });
+        await Promise.all(
+          uploads.map((upload) => rm(upload.path, { force: true })),
+        );
       }
     },
   );

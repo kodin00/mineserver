@@ -27,6 +27,7 @@ const EnvSchema = z.object({
     .int()
     .positive()
     .default(2 * 1024 * 1024 * 1024),
+  MAX_UPLOAD_FILES: z.coerce.number().int().min(1).max(1000).default(100),
   MAX_ZIP_EXPANDED_BYTES: z.coerce
     .number()
     .int()

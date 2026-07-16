@@ -61,7 +61,7 @@ Deleting a server archives this directory by default. Permanent deletion require
 - Vanilla, Paper, Fabric, Forge, and NeoForge
 - Automatic Java tag selection with a per-server override
 - Explicit apply/restart for saved configuration changes
-- Paper plugins and mod-loader mods as individual JARs or safe bulk ZIPs
+- Paper plugins and mod-loader mods as individual JARs or safe bulk ZIPs, with multi-file picking and drag-and-drop upload
 - File explorer with recursive search and an atomic, conflict-aware text editor
 - Individual JAR downloads, bulk add-on ZIP downloads, and name/date sorting
 - One-time public ZIP links for sharing the current mod or plugin set

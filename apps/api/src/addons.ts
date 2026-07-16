@@ -45,6 +45,31 @@ export async function installJar(
   return filename;
 }
 
+export async function installAddonBatch(
+  uploads: Array<{ path: string; originalName: string }>,
+  directory: string,
+): Promise<string[]> {
+  const installed: string[] = [];
+  try {
+    for (const upload of uploads) {
+      const extension = path.extname(upload.originalName).toLowerCase();
+      const names =
+        extension === ".jar"
+          ? [await installJar(upload.path, upload.originalName, directory)]
+          : await installZip(upload.path, directory);
+      installed.push(...names);
+    }
+    return installed;
+  } catch (error) {
+    await Promise.all(
+      installed.map((filename) =>
+        removeAddon(directory, filename).catch(() => undefined),
+      ),
+    );
+    throw error;
+  }
+}
+
 function openZip(filename: string): Promise<ZipFile> {
   return new Promise((resolve, reject) => {
     yauzl.open(

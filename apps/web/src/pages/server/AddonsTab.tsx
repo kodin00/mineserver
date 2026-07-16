@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type DragEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Archive,
   Check,
@@ -21,6 +28,8 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
   const [files, setFiles] = useState<AddonFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadCount, setUploadCount] = useState(0);
+  const [dragging, setDragging] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [shareLink, setShareLink] = useState<{
     url: string;
@@ -30,6 +39,7 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
   const [sort, setSort] = useState<"alphabetical" | "newest">("alphabetical");
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const uploadInFlight = useRef(false);
   const load = useCallback(async () => {
     try {
       const response = await api<{
@@ -57,12 +67,26 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
     [files, sort],
   );
 
-  async function upload(file: File) {
+  async function upload(selectedFiles: File[]) {
+    if (selectedFiles.length === 0) return;
+    if (uploadInFlight.current) {
+      setError("Wait for the current upload to finish.");
+      return;
+    }
+    const invalid = selectedFiles.find(
+      (file) => !/\.(?:jar|zip)$/i.test(file.name),
+    );
+    if (invalid) {
+      setError(`Only JAR and ZIP files are accepted: ${invalid.name}`);
+      return;
+    }
+    uploadInFlight.current = true;
     setUploading(true);
+    setUploadCount(selectedFiles.length);
     setError("");
     try {
       const form = new FormData();
-      form.append("file", file);
+      for (const file of selectedFiles) form.append("file", file);
       await api(`/api/servers/${server.id}/addons`, {
         method: "POST",
         body: form,
@@ -71,9 +95,43 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
     } catch (error) {
       setError(error instanceof Error ? error.message : "Upload failed");
     } finally {
+      uploadInFlight.current = false;
       setUploading(false);
+      setUploadCount(0);
       if (input.current) input.current.value = "";
     }
+  }
+
+  function isFileDrag(event: DragEvent<HTMLDivElement>) {
+    return event.dataTransfer.types.includes("Files");
+  }
+
+  function dragEnter(event: DragEvent<HTMLDivElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    setDragging(true);
+  }
+
+  function dragOver(event: DragEvent<HTMLDivElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function dragLeave(event: DragEvent<HTMLDivElement>) {
+    if (
+      event.relatedTarget instanceof Node &&
+      event.currentTarget.contains(event.relatedTarget)
+    )
+      return;
+    setDragging(false);
+  }
+
+  function drop(event: DragEvent<HTMLDivElement>) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    setDragging(false);
+    void upload(Array.from(event.dataTransfer.files));
   }
 
   async function toggle(file: AddonFile) {
@@ -161,13 +219,20 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
     );
   }
   return (
-    <div className="tab-stack">
+    <div
+      className={`tab-stack addon-drop-surface ${dragging ? "is-dragging" : ""}`}
+      aria-busy={uploading}
+      onDragEnter={dragEnter}
+      onDragOver={dragOver}
+      onDragLeave={dragLeave}
+      onDrop={drop}
+    >
       {error && <ErrorBanner message={error} />}
-      <div className="panel upload-panel">
+      <div className="panel upload-panel addon-upload-panel">
         <div>
           <h2>{kind === "plugins" ? "Plugins" : "Mods"}</h2>
           <p>
-            Upload one JAR or a ZIP containing only JAR files. Changes apply
+            Drop JARs or ZIPs here, or choose multiple files. Changes apply
             after restart.
           </p>
         </div>
@@ -211,9 +276,10 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
             ref={input}
             hidden
             type="file"
+            multiple
             accept=".jar,.zip"
             onChange={(event) =>
-              event.target.files?.[0] && void upload(event.target.files[0])
+              event.target.files && void upload(Array.from(event.target.files))
             }
           />
           <button
@@ -226,8 +292,17 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
             ) : (
               <FileUp size={17} />
             )}
-            Upload JAR or ZIP
+            {uploading
+              ? `Uploading ${uploadCount} file${uploadCount === 1 ? "" : "s"}`
+              : "Choose JARs or ZIPs"}
           </button>
+          {dragging && (
+            <div className="addon-drop-overlay" role="status">
+              <FileUp size={24} />
+              <strong>Drop files to install</strong>
+              <span>JAR and ZIP files can be mixed</span>
+            </div>
+          )}
         </div>
       </div>
       {shareLink && (
