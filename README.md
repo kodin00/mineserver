@@ -64,10 +64,15 @@ Deleting a server archives this directory by default. Permanent deletion require
 - Paper plugins and mod-loader mods as individual JARs or safe bulk ZIPs
 - File explorer with recursive search and an atomic, conflict-aware text editor
 - Individual JAR downloads, bulk add-on ZIP downloads, and name/date sorting
+- One-time public ZIP links for sharing the current mod or plugin set
 - Manual and cron-scheduled ZIP backups with count/day retention
 - Restore into staging, pre-restore safety archive, health check, and automatic rollback
 
 ZIP uploads accept only JAR entries. Absolute paths, traversal paths, duplicate names, non-JAR content, oversized expansion, and collisions with installed add-ons are rejected.
+
+One-time add-on links store only a SHA-256 token hash. The first public `GET` atomically consumes the token before streaming starts, all later requests receive `404`, and responses are marked non-cacheable. Unused links expire after `ADDON_SHARE_TTL_MINUTES` (60 by default), while public attempts are limited per client IP by `PUBLIC_DOWNLOAD_RATE_LIMIT` (10 per minute by default). Because redemption happens when a download starts, an interrupted transfer cannot be retried; generate a new link instead.
+
+The bundled nginx proxy overwrites client forwarding headers and the API trusts exactly one proxy hop. If the API is deployed through a different proxy topology, adjust `TRUST_PROXY_HOPS` and forwarding headers together so rate limiting cannot be bypassed with spoofed headers.
 
 The file editor is restricted to UTF-8 configuration and text formats under a server's `data/` directory. Symbolic links and path traversal are rejected, files are size-limited by `MAX_EDIT_FILE_BYTES`, and concurrent on-disk changes must be reloaded before saving.
 

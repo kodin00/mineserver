@@ -155,6 +155,7 @@ async function fetchMetadata() {
 export async function buildApp(context: AppContext) {
   const { store, docker, jobs } = context;
   const app = Fastify({
+    trustProxy: config.TRUST_PROXY_HOPS > 0 ? config.TRUST_PROXY_HOPS : false,
     logger: {
       level: config.NODE_ENV === "test" ? "silent" : "info",
     },
@@ -179,7 +180,12 @@ export async function buildApp(context: AppContext) {
 
   app.addHook("preHandler", async (request, reply) => {
     const pathname = request.url.split("?")[0]!;
-    if (pathname === "/api/health" || pathname === "/api/auth/login") return;
+    if (
+      pathname === "/api/health" ||
+      pathname === "/api/auth/login" ||
+      pathname.startsWith("/api/public/")
+    )
+      return;
     if (!pathname.startsWith("/api/") && !pathname.startsWith("/ws/")) return;
     const authResult = await authenticate(request, reply, store);
     if (authResult) return authResult;
@@ -195,6 +201,63 @@ export async function buildApp(context: AppContext) {
   });
 
   app.get("/api/health", async () => ({ status: "ok" }));
+
+  app.head(
+    "/api/public/addons/:token",
+    {
+      config: {
+        rateLimit: {
+          max: config.PUBLIC_DOWNLOAD_RATE_LIMIT,
+          timeWindow: "1 minute",
+        },
+      },
+    },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store, private, max-age=0");
+      return reply.code(405).header("allow", "GET").send();
+    },
+  );
+
+  app.get<{ Params: { token: string } }>(
+    "/api/public/addons/:token",
+    {
+      config: {
+        rateLimit: {
+          max: config.PUBLIC_DOWNLOAD_RATE_LIMIT,
+          timeWindow: "1 minute",
+        },
+      },
+    },
+    async (request, reply) => {
+      const token = request.params.token;
+      if (!/^[A-Za-z0-9_-]{43}$/.test(token)) {
+        return reply.code(404).send({ error: "Download link not found" });
+      }
+      const share = store.claimAddonShare(sha256(token));
+      if (!share) {
+        return reply.code(404).send({ error: "Download link not found" });
+      }
+      const row = store.getServer(share.server_id);
+      if (!row) {
+        return reply.code(404).send({ error: "Download link not found" });
+      }
+      const kind = addonKind(rowConfig(row).type);
+      if (!kind) {
+        return reply.code(404).send({ error: "Download link not found" });
+      }
+      const archive = await createAddonsArchive(
+        instancePaths(config.instancesRoot, row.id).addons,
+      );
+      reply.headers({
+        "cache-control": "no-store, private, max-age=0",
+        "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${row.slug}-${kind}.zip`)}`,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+      });
+      reply.type("application/zip");
+      return reply.send(archive);
+    },
+  );
 
   app.post(
     "/api/auth/login",
@@ -362,6 +425,36 @@ export async function buildApp(context: AppContext) {
       if (!row)
         throw Object.assign(new Error("Server not found"), { statusCode: 404 });
       return docker.stats(row.id, instancePaths(config.instancesRoot, row.id));
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/addons/share",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), {
+          statusCode: 404,
+        });
+      const kind = addonKind(rowConfig(row).type);
+      if (!kind)
+        throw new Error("This server type does not support managed add-ons");
+      const files = await listAddons(
+        instancePaths(config.instancesRoot, row.id).addons,
+      );
+      if (files.length === 0) throw new Error("No add-ons to share");
+      const token = randomToken();
+      const expiresAt = new Date(
+        Date.now() + config.ADDON_SHARE_TTL_MINUTES * 60_000,
+      ).toISOString();
+      store.createAddonShare(sha256(token), row.id, expiresAt);
+      return reply.code(201).send({
+        path: `/api/public/addons/${token}`,
+        expiresAt,
+      });
     },
   );
 
@@ -746,6 +839,7 @@ export async function createContext(): Promise<AppContext> {
   const store = new Store(config.databasePath);
   if (!store.getAdmin()) store.createAdmin(await hash(config.ADMIN_PASSWORD));
   store.pruneSessions();
+  store.pruneAddonShares();
   for (const row of store.listServers()) {
     const paths = instancePaths(config.instancesRoot, row.id);
     if (

@@ -56,9 +56,17 @@ export class Store {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS addon_share_tokens (
+        token_hash TEXT PRIMARY KEY,
+        server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_operations_server_created
         ON operations(server_id, created_at DESC);
-      PRAGMA user_version=1;
+      CREATE INDEX IF NOT EXISTS idx_addon_share_tokens_expires
+        ON addon_share_tokens(expires_at);
+      PRAGMA user_version=2;
     `);
   }
 
@@ -110,6 +118,32 @@ export class Store {
   pruneSessions() {
     this.db
       .prepare("DELETE FROM sessions WHERE expires_at < ?")
+      .run(new Date().toISOString());
+  }
+
+  createAddonShare(tokenHash: string, serverId: string, expiresAt: string) {
+    this.db
+      .prepare(
+        `INSERT INTO addon_share_tokens(token_hash,server_id,expires_at,created_at)
+         VALUES(?,?,?,?)`,
+      )
+      .run(tokenHash, serverId, expiresAt, new Date().toISOString());
+  }
+
+  claimAddonShare(tokenHash: string): { server_id: string } | undefined {
+    const now = new Date().toISOString();
+    return this.db
+      .prepare(
+        `DELETE FROM addon_share_tokens
+         WHERE token_hash=? AND expires_at>?
+         RETURNING server_id`,
+      )
+      .get(tokenHash, now) as { server_id: string } | undefined;
+  }
+
+  pruneAddonShares() {
+    this.db
+      .prepare("DELETE FROM addon_share_tokens WHERE expires_at<=?")
       .run(new Date().toISOString());
   }
 

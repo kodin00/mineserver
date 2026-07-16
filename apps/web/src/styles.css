@@ -836,6 +836,29 @@ label small {
   padding-top: 0;
   padding-bottom: 0;
 }
+.share-link-panel {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.7fr) minmax(320px, 1.3fr);
+  align-items: center;
+  gap: 24px;
+  border-color: #31563a;
+  background: linear-gradient(135deg, #132219, var(--surface));
+}
+.share-link-panel > div:first-child > strong {
+  font-size: 13px;
+}
+.share-link-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.share-link-row input {
+  min-width: 0;
+  flex: 1;
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+}
 .file-panel {
   padding-top: 8px;
   padding-bottom: 8px;
@@ -1184,6 +1207,13 @@ label small {
   .addon-actions,
   .addon-actions label {
     width: 100%;
+  }
+  .share-link-panel {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+  .share-link-row {
+    align-items: stretch;
   }
   .button-row {
     width: 100%;

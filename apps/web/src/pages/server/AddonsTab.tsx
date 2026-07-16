@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
+  Check,
+  Copy,
   Download,
   FileArchive,
   FileUp,
   LoaderCircle,
   PackageOpen,
   Power,
+  Share2,
   Trash2,
 } from "lucide-react";
 import type { AddonFile, ServerSummary } from "@mineserver/shared";
@@ -18,6 +21,12 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
   const [files, setFiles] = useState<AddonFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareLink, setShareLink] = useState<{
+    url: string;
+    expiresAt: string;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
   const [sort, setSort] = useState<"alphabetical" | "newest">("alphabetical");
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -106,6 +115,42 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
     }
   }
 
+  async function createShareLink() {
+    setSharing(true);
+    setError("");
+    setCopied(false);
+    try {
+      const response = await api<{ path: string; expiresAt: string }>(
+        `/api/servers/${server.id}/addons/share`,
+        { method: "POST" },
+      );
+      const url = new URL(response.path, window.location.origin).toString();
+      setShareLink({ url, expiresAt: response.expiresAt });
+      try {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+      } catch {
+        // The URL remains visible when clipboard permission is unavailable.
+      }
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Unable to create share link",
+      );
+    } finally {
+      setSharing(false);
+    }
+  }
+
+  async function copyShareLink() {
+    if (!shareLink) return;
+    try {
+      await navigator.clipboard.writeText(shareLink.url);
+      setCopied(true);
+    } catch {
+      setError("Clipboard access was denied. Copy the link manually.");
+    }
+  }
+
   if (!loading && !kind) {
     return (
       <EmptyState
@@ -141,12 +186,26 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
             </select>
           </label>
           {files.length > 0 && (
-            <a
-              className="button ghost"
-              href={`/api/servers/${server.id}/addons/download-all`}
-            >
-              <Archive size={17} /> Download all
-            </a>
+            <>
+              <a
+                className="button ghost"
+                href={`/api/servers/${server.id}/addons/download-all`}
+              >
+                <Archive size={17} /> Download all
+              </a>
+              <button
+                className="button ghost"
+                disabled={sharing}
+                onClick={() => void createShareLink()}
+              >
+                {sharing ? (
+                  <LoaderCircle className="spin" size={17} />
+                ) : (
+                  <Share2 size={17} />
+                )}
+                Share once
+              </button>
+            </>
           )}
           <input
             ref={input}
@@ -171,6 +230,32 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
           </button>
         </div>
       </div>
+      {shareLink && (
+        <div className="panel share-link-panel" role="status">
+          <div>
+            <strong>One-time public download link</strong>
+            <p>
+              The first download invalidates this URL immediately. If unused, it
+              expires {new Date(shareLink.expiresAt).toLocaleString()}.
+            </p>
+          </div>
+          <div className="share-link-row">
+            <input
+              aria-label="One-time public download link"
+              readOnly
+              value={shareLink.url}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <button
+              className="button primary"
+              onClick={() => void copyShareLink()}
+            >
+              {copied ? <Check size={17} /> : <Copy size={17} />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="panel file-panel">
         {files.length === 0 ? (
           <div className="compact-empty">

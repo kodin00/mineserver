@@ -14,6 +14,14 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+  ADDON_SHARE_TTL_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(7 * 24 * 60)
+    .default(60),
+  PUBLIC_DOWNLOAD_RATE_LIMIT: z.coerce.number().int().positive().default(10),
   MAX_UPLOAD_BYTES: z.coerce
     .number()
     .int()
