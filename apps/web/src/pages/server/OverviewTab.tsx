@@ -5,15 +5,15 @@ import {
   Cpu,
   Download,
   HardDrive,
+  Hammer,
   LoaderCircle,
   Play,
-  RefreshCcw,
   RotateCw,
   Users,
 } from "lucide-react";
 import type { Operation, ServerStats, ServerSummary } from "@mineserver/shared";
 import { api } from "../../api";
-import { ErrorBanner } from "../../components/Layout";
+import { ConfirmationDialog, ErrorBanner } from "../../components/Layout";
 
 export function OverviewTab({
   server,
@@ -26,6 +26,7 @@ export function OverviewTab({
   const [operations, setOperations] = useState<Operation[]>([]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [confirmRebuild, setConfirmRebuild] = useState(false);
 
   useEffect(() => {
     if (server.state !== "running") {
@@ -68,6 +69,17 @@ export function OverviewTab({
 
   return (
     <div className="tab-stack">
+      <ConfirmationDialog
+        open={confirmRebuild}
+        title="Rebuild this container?"
+        body="The current container will be removed and recreated from the current local image. Server data is preserved, and all pending configuration changes will be applied."
+        confirmLabel="Rebuild container"
+        onCancel={() => setConfirmRebuild(false)}
+        onConfirm={() => {
+          setConfirmRebuild(false);
+          void action("rebuild");
+        }}
+      />
       {error && <ErrorBanner message={error} />}
       <div className="action-bar panel">
         <div>
@@ -77,7 +89,7 @@ export function OverviewTab({
           </p>
         </div>
         <div className="button-row">
-          {server.state === "running" ? (
+          {server.state !== "stopped" && server.containerExists ? (
             <>
               <button
                 className="button ghost"
@@ -91,42 +103,47 @@ export function OverviewTab({
                 )}
                 Stop
               </button>
-              <button
-                className="button ghost"
-                disabled={!!busy}
-                onClick={() => void action("restart")}
-              >
-                {busy === "restart" ? (
-                  <LoaderCircle className="spin" size={17} />
-                ) : (
-                  <RotateCw size={17} />
-                )}
-                {server.restartRequired ? "Apply & restart" : "Restart"}
-              </button>
+              {(server.state === "running" || server.state === "unhealthy") && (
+                <button
+                  className="button ghost"
+                  disabled={!!busy}
+                  onClick={() => void action("restart")}
+                >
+                  {busy === "restart" ? (
+                    <LoaderCircle className="spin" size={17} />
+                  ) : (
+                    <RotateCw size={17} />
+                  )}
+                  Restart
+                </button>
+              )}
             </>
           ) : (
             <button
               className="button primary"
               disabled={!!busy}
-              onClick={() => void action("start")}
+              onClick={() => void action("run")}
             >
-              {busy === "start" ? (
+              {busy === "run" ? (
                 <LoaderCircle className="spin" size={17} />
               ) : (
                 <Play size={17} />
               )}
-              Start server
+              Run server
             </button>
           )}
-          {server.restartRequired && server.state !== "running" && (
-            <button
-              className="button primary"
-              disabled={!!busy}
-              onClick={() => void action("apply")}
-            >
-              <RefreshCcw size={17} /> Apply changes
-            </button>
-          )}
+          <button
+            className="button danger-outline"
+            disabled={!!busy}
+            onClick={() => setConfirmRebuild(true)}
+          >
+            {busy === "rebuild" ? (
+              <LoaderCircle className="spin" size={17} />
+            ) : (
+              <Hammer size={17} />
+            )}
+            Rebuild
+          </button>
           <button
             className="button ghost"
             disabled={!!busy}
@@ -202,7 +219,17 @@ export function OverviewTab({
               </span>
               <div>
                 <strong>{operation.kind}</strong>
-                <small>{operation.message || operation.status}</small>
+                <small>
+                  {operation.status === "failed"
+                    ? "Failed — error log available"
+                    : operation.message || operation.status}
+                </small>
+                {operation.status === "failed" && operation.message && (
+                  <details className="operation-error">
+                    <summary>View error log</summary>
+                    <pre>{operation.message}</pre>
+                  </details>
+                )}
               </div>
               <time>{new Date(operation.updatedAt).toLocaleString()}</time>
             </div>

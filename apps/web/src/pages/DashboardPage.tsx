@@ -6,6 +6,7 @@ import {
   Cpu,
   HardDrive,
   RefreshCw,
+  TriangleAlert,
   Users,
 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -78,7 +79,7 @@ export function DashboardPage() {
           {servers.map((server) => (
             <Link
               to={`/servers/${server.id}`}
-              className="server-card"
+              className={`server-card ${server.runtimeError || server.state === "unhealthy" ? "has-error" : ""}`}
               key={server.id}
             >
               <div className="card-top">
@@ -111,6 +112,19 @@ export function DashboardPage() {
               </div>
               {server.restartRequired && (
                 <div className="pending-badge">Changes waiting to apply</div>
+              )}
+              {(server.runtimeError || server.state === "unhealthy") && (
+                <div
+                  className="server-error-badge"
+                  title={
+                    server.runtimeError?.message || "Container is unhealthy"
+                  }
+                >
+                  <TriangleAlert size={13} />
+                  {server.runtimeError?.exitCode != null
+                    ? `Error · exit ${server.runtimeError.exitCode}`
+                    : "Needs attention"}
+                </div>
               )}
             </Link>
           ))}

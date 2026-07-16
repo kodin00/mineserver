@@ -188,6 +188,15 @@ code,
   border-color: #713033;
   color: #ffd0ce;
 }
+.button.danger-outline {
+  background: #251719;
+  border-color: #603033;
+  color: #ffaaa6;
+}
+.button.danger-outline:hover {
+  background: #351c1e;
+  border-color: #814044;
+}
 .button.wide {
   width: 100%;
 }
@@ -319,6 +328,38 @@ textarea {
   align-items: center;
   gap: 10px;
 }
+.runtime-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 18px;
+  border: 1px solid #733235;
+  border-radius: 10px;
+  color: #ffd0ce;
+  background: #35191a;
+}
+.runtime-error-banner > svg {
+  flex: none;
+  color: var(--danger);
+}
+.runtime-error-banner > span {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.runtime-error-banner strong,
+.runtime-error-banner small {
+  display: block;
+}
+.runtime-error-banner strong {
+  margin-bottom: 3px;
+}
+.runtime-error-banner small {
+  margin-top: 5px;
+  color: #c68f8d;
+}
 .error-banner {
   color: #ffc6c3;
   background: #35191a;
@@ -351,6 +392,9 @@ textarea {
   transform: translateY(-3px);
   border-color: #35513b;
   box-shadow: 0 20px 45px rgba(0, 0, 0, 0.22);
+}
+.server-card.has-error {
+  border-color: #613033;
 }
 .card-top {
   display: flex;
@@ -445,6 +489,19 @@ textarea {
   font-size: 10px;
   color: #efc87c;
   background: #2c2517;
+  border-radius: 6px;
+}
+.server-error-badge {
+  margin-top: 8px;
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #ffaaa6;
+  background: #32191a;
+  border: 1px solid #59282b;
   border-radius: 6px;
 }
 .empty-state {
@@ -656,8 +713,67 @@ textarea {
   height: 20px;
   background: transparent;
 }
+.operation-error {
+  margin-top: 8px;
+  color: #ffaaa6;
+  font-size: 10px;
+}
+.operation-error summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 700;
+}
+.operation-error pre {
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #ffc6c3;
+  background: #190f10;
+  border: 1px solid #492426;
+  border-radius: 7px;
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  line-height: 1.5;
+}
 .muted {
   color: var(--muted);
+}
+
+.confirmation-dialog {
+  width: min(470px, calc(100% - 28px));
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+}
+.confirmation-dialog::backdrop {
+  background: rgba(2, 6, 3, 0.76);
+  backdrop-filter: blur(4px);
+}
+.dialog-card {
+  padding: 23px;
+  background: #141c16;
+  border: 1px solid #593033;
+  border-radius: 14px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.5);
+}
+.dialog-card h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.dialog-card p {
+  margin: 10px 0 22px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
 }
 
 .console-panel {
@@ -1236,6 +1352,13 @@ label small {
   .files-toolbar {
     flex-direction: column;
     align-items: flex-start;
+  }
+  .runtime-error-banner {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .runtime-error-banner .button {
+    width: 100%;
   }
   .addon-actions,
   .addon-actions label {

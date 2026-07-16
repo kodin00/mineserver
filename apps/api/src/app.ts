@@ -98,7 +98,9 @@ async function serverSummary(
     appliedRevision: row.applied_revision,
     restartRequired: row.revision !== row.applied_revision,
     state: runtime.state,
+    containerExists: runtime.exists,
     ...(runtime.health ? { health: runtime.health } : {}),
+    ...(runtime.runtimeError ? { runtimeError: runtime.runtimeError } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -176,12 +178,37 @@ export async function buildApp(context: AppContext) {
   if (config.NODE_ENV !== "test") backupScheduler.start();
   app.addHook("onClose", async () => backupScheduler.stop());
 
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     const message = error instanceof Error ? error.message : String(error);
     const status =
       (error as any).statusCode ?? (/not found/i.test(message) ? 404 : 400);
+    const details = {
+      err: error,
+      method: request.method,
+      url: request.url,
+      statusCode: status,
+    };
+    if (status >= 500) request.log.error(details, "Request failed");
+    else request.log.warn(details, "Request rejected");
     reply.code(status).send({ error: errorMessage(error) });
   });
+
+  const logFailedOperation = (operation: unknown) => {
+    const value = operation as import("@mineserver/shared").Operation;
+    if (value.status === "failed") {
+      app.log.error(
+        {
+          operationId: value.id,
+          serverId: value.serverId,
+          kind: value.kind,
+          error: value.message,
+        },
+        "Server operation failed",
+      );
+    }
+  };
+  jobs.on("operation", logFailedOperation);
+  app.addHook("onClose", async () => jobs.off("operation", logFailedOperation));
 
   app.addHook("preHandler", async (request, reply) => {
     const pathname = request.url.split("?")[0]!;
@@ -396,20 +423,23 @@ export async function buildApp(context: AppContext) {
     const paths = instancePaths(config.instancesRoot, row.id);
     const action = request.params.action;
     const operation = jobs.run(row.id, action, async () => {
-      if (action === "start" || action === "apply") {
-        await docker.up(row.id, paths, row.revision !== row.applied_revision);
+      if (action === "run" || action === "start") {
+        const runtime = await docker.status(row.id, paths);
+        await docker.startExisting(row.id, paths);
+        // With no existing container, Compose creates one from the current
+        // file. Otherwise --no-recreate deliberately leaves changes pending.
+        if (!runtime.exists) {
+          store.markApplied(row.id);
+          await rm(paths.backupMigrationMarker, { force: true });
+        }
+      } else if (action === "rebuild" || action === "apply") {
+        await docker.rebuild(row.id, paths);
         store.markApplied(row.id);
         await rm(paths.backupMigrationMarker, { force: true });
       } else if (action === "stop") {
         await docker.stop(row.id, paths);
       } else if (action === "restart") {
-        if (row.revision !== row.applied_revision) {
-          await docker.up(row.id, paths, true);
-          store.markApplied(row.id);
-          await rm(paths.backupMigrationMarker, { force: true });
-        } else {
-          await docker.restart(row.id, paths);
-        }
+        await docker.restart(row.id, paths);
       } else if (action === "pull") {
         await docker.pull(row.id, paths);
         store.markApplied(row.id);
@@ -867,19 +897,33 @@ export async function createContext(): Promise<AppContext> {
   if (!store.getAdmin()) store.createAdmin(await hash(config.ADMIN_PASSWORD));
   store.pruneSessions();
   store.pruneAddonShares();
+  const docker = new ComposeManager();
   for (const row of store.listServers()) {
     const paths = instancePaths(config.instancesRoot, row.id);
-    if (
-      (await pathExists(paths.compose)) &&
-      (await readFile(paths.compose, "utf8")).includes("itzg/mc-backup")
-    ) {
+    const composeContents = (await pathExists(paths.compose))
+      ? await readFile(paths.compose, "utf8")
+      : "";
+    const needsBackupMigration = composeContents.includes("itzg/mc-backup");
+    const needsRestartPolicyMigration = composeContents.includes(
+      "restart: unless-stopped",
+    );
+    if (needsBackupMigration) {
       store.touchServerRevision(row.id);
       await writeFile(paths.backupMigrationMarker, "apply required\n", {
         mode: 0o600,
       });
+    }
+    if (needsBackupMigration || needsRestartPolicyMigration) {
       await writeCompose(row.id, rowConfig(row), paths);
     }
+    if (needsRestartPolicyMigration) {
+      await docker.enforceRestartLimit(row.id, paths).catch((error) => {
+        console.error(
+          `[mineserver] Could not update restart policy for ${row.id}:`,
+          error,
+        );
+      });
+    }
   }
-  const docker = new ComposeManager();
   return { store, docker, jobs: new JobRunner(store) };
 }

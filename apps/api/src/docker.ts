@@ -7,6 +7,25 @@ import { runCommand } from "./utils.js";
 export interface RuntimeStatus {
   state: ServerState;
   health?: string;
+  exists: boolean;
+  runtimeError?: {
+    message: string;
+    exitCode: number | null;
+    restartCount: number;
+    occurredAt: string | null;
+  };
+}
+
+interface ContainerInspection {
+  State?: {
+    Status?: string;
+    Running?: boolean;
+    Restarting?: boolean;
+    ExitCode?: number;
+    Error?: string;
+    FinishedAt?: string;
+  };
+  RestartCount?: number;
 }
 
 export class ComposeManager {
@@ -36,10 +55,25 @@ export class ComposeManager {
         "up",
         "-d",
         "--remove-orphans",
+        "--no-build",
         ...(forceRecreate ? ["--force-recreate"] : []),
       ],
       10 * 60_000,
     );
+  }
+
+  /** Start the current container without applying Compose file changes. */
+  startExisting(id: string, paths: InstancePaths) {
+    return this.run(
+      id,
+      paths,
+      ["up", "-d", "--no-recreate", "--no-build", "mc"],
+      10 * 60_000,
+    );
+  }
+
+  rebuild(id: string, paths: InstancePaths) {
+    return this.up(id, paths, true);
   }
 
   stop(id: string, paths: InstancePaths) {
@@ -92,15 +126,40 @@ export class ComposeManager {
     );
   }
 
+  protected async inspect(containerId: string): Promise<ContainerInspection> {
+    const result = await runCommand(
+      config.DOCKER_BIN,
+      ["inspect", "--format", "{{json .}}", containerId],
+      { timeoutMs: 10_000 },
+    );
+    return JSON.parse(result.stdout.trim()) as ContainerInspection;
+  }
+
+  async enforceRestartLimit(id: string, paths: InstancePaths) {
+    const container = await this.run(
+      id,
+      paths,
+      ["ps", "--all", "-q", "mc"],
+      10_000,
+    );
+    const containerId = container.stdout.trim();
+    if (!containerId) return;
+    await runCommand(
+      config.DOCKER_BIN,
+      ["update", "--restart", "on-failure:1", containerId],
+      { timeoutMs: 30_000 },
+    );
+  }
+
   async status(id: string, paths: InstancePaths): Promise<RuntimeStatus> {
     try {
       const result = await this.run(
         id,
         paths,
-        ["ps", "--format", "json", "mc"],
+        ["ps", "--all", "--format", "json", "mc"],
         10_000,
       );
-      if (!result.stdout.trim()) return { state: "stopped" };
+      if (!result.stdout.trim()) return { state: "stopped", exists: false };
       const raw = result.stdout.trim();
       let value: any;
       try {
@@ -115,15 +174,58 @@ export class ComposeManager {
       }
       const rawState = String(value.State ?? "").toLowerCase();
       const health = String(value.Health ?? "").toLowerCase() || undefined;
+      const containerId = String(value.ID ?? "").trim();
+      let inspection: ContainerInspection = {};
+      if (containerId) {
+        try {
+          inspection = await this.inspect(containerId);
+        } catch {
+          // Compose status is still useful if the container disappeared
+          // between the ps and inspect calls.
+        }
+      }
+      const exitCode = Number.isFinite(inspection.State?.ExitCode)
+        ? inspection.State!.ExitCode!
+        : Number.isFinite(Number(value.ExitCode))
+          ? Number(value.ExitCode)
+          : null;
+      const restartCount = Number(inspection.RestartCount ?? 0);
+      const dockerError = String(inspection.State?.Error ?? "").trim();
+      const failed =
+        rawState === "dead" || (rawState === "exited" && exitCode !== 0);
+      const runtimeError = failed
+        ? {
+            message:
+              dockerError ||
+              `Container exited with code ${exitCode ?? "unknown"} after ${restartCount} automatic restart${restartCount === 1 ? "" : "s"}.`,
+            exitCode,
+            restartCount,
+            occurredAt:
+              inspection.State?.FinishedAt &&
+              inspection.State.FinishedAt !== "0001-01-01T00:00:00Z"
+                ? inspection.State.FinishedAt
+                : null,
+          }
+        : undefined;
       if (rawState === "running" && health === "unhealthy")
-        return { state: "unhealthy", health };
+        return { state: "unhealthy", health, exists: true };
       if (rawState === "running")
-        return { state: "running", ...(health ? { health } : {}) };
+        return {
+          state: "running",
+          exists: true,
+          ...(health ? { health } : {}),
+        };
       if (rawState === "restarting" || rawState === "created")
-        return { state: "starting", ...(health ? { health } : {}) };
+        return {
+          state: "starting",
+          exists: true,
+          ...(health ? { health } : {}),
+        };
       return {
         state: rawState === "exited" ? "stopped" : "unknown",
+        exists: true,
         ...(health ? { health } : {}),
+        ...(runtimeError ? { runtimeError } : {}),
       };
     } catch (error: any) {
       if (
@@ -131,9 +233,9 @@ export class ComposeManager {
           String(error?.message),
         )
       ) {
-        return { state: "stopped" };
+        return { state: "stopped", exists: false };
       }
-      return { state: "unknown" };
+      return { state: "unknown", exists: false };
     }
   }
 

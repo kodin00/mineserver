@@ -36,7 +36,7 @@ function multipart(files: Array<{ name: string; contents: string }>) {
   };
 }
 
-async function fixture() {
+async function fixture(docker: ComposeManager = {} as ComposeManager) {
   const root = await mkdtemp(path.join(tmpdir(), "mineserver-share-"));
   roots.push(root);
   config.instancesRoot = path.join(root, "instances");
@@ -61,11 +61,68 @@ async function fixture() {
   );
   const app = await buildApp({
     store,
-    docker: {} as ComposeManager,
+    docker,
     jobs: new JobRunner(store),
   });
   return { app, store, serverId, sessionToken, csrfToken };
 }
+
+describe("server lifecycle actions", () => {
+  it("runs an existing container without applying changes and rebuilds only on confirmation action", async () => {
+    const calls: string[] = [];
+    const docker = {
+      status: async () => ({ state: "stopped" as const, exists: true }),
+      startExisting: async () => {
+        calls.push("run");
+      },
+      rebuild: async () => {
+        calls.push("rebuild");
+      },
+    } as unknown as ComposeManager;
+    const { app, store, serverId, sessionToken, csrfToken } =
+      await fixture(docker);
+    const headers = {
+      cookie: `ms_session=${sessionToken}`,
+      "x-csrf-token": csrfToken,
+    };
+    store.markApplied(serverId);
+    store.touchServerRevision(serverId);
+
+    const run = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/actions/run`,
+      headers,
+    });
+    expect(run.statusCode).toBe(202);
+    await expect
+      .poll(
+        () =>
+          store.listOperations(serverId).find((item) => item.kind === "run")
+            ?.status,
+      )
+      .toBe("succeeded");
+    expect(store.getServer(serverId)?.applied_revision).toBe(1);
+
+    const rebuild = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/actions/rebuild`,
+      headers,
+    });
+    expect(rebuild.statusCode).toBe(202);
+    await expect
+      .poll(
+        () =>
+          store.listOperations(serverId).find((item) => item.kind === "rebuild")
+            ?.status,
+      )
+      .toBe("succeeded");
+    expect(calls).toEqual(["run", "rebuild"]);
+    expect(store.getServer(serverId)?.applied_revision).toBe(2);
+
+    await app.close();
+    store.db.close();
+  });
+});
 
 afterEach(async () => {
   config.instancesRoot = originalInstancesRoot;

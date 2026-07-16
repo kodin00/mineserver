@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Settings,
   SquareTerminal,
+  TriangleAlert,
 } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import type { ServerSummary } from "@mineserver/shared";
@@ -79,6 +80,26 @@ export function ServerPage() {
       }
     >
       {error && <ErrorBanner message={error} />}
+      {server.runtimeError && (
+        <div className="runtime-error-banner" role="alert">
+          <TriangleAlert size={20} />
+          <span>
+            <strong>Container stopped after an error.</strong>{" "}
+            {server.runtimeError.message}
+            {server.runtimeError.occurredAt && (
+              <small>
+                {new Date(server.runtimeError.occurredAt).toLocaleString()}
+              </small>
+            )}
+          </span>
+          <button
+            className="button ghost"
+            onClick={() => setSearch({ tab: "console" })}
+          >
+            View logs
+          </button>
+        </div>
+      )}
       {server.restartRequired && (
         <div className="notice-banner">
           <Blocks size={19} />

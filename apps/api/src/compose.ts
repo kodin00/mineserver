@@ -115,7 +115,9 @@ export function renderCompose(
       mc: {
         image: `itzg/minecraft-server:${config.javaTag || automaticJavaTag(config.version)}`,
         ...(memoryLimit ? { mem_limit: memoryLimit } : {}),
-        restart: "unless-stopped",
+        // Retry one unexpected failure, then leave the container stopped so a
+        // broken server cannot enter an unbounded restart loop.
+        restart: "on-failure:1",
         tty: true,
         stdin_open: true,
         ports: [`${config.port}:25565`],

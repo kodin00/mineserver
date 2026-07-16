@@ -150,6 +150,13 @@ export interface ServerSummary {
   restartRequired: boolean;
   state: ServerState;
   health?: string;
+  containerExists: boolean;
+  runtimeError?: {
+    message: string;
+    exitCode: number | null;
+    restartCount: number;
+    occurredAt: string | null;
+  };
   createdAt: string;
   updatedAt: string;
 }

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Box, LogOut, Settings } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
@@ -80,7 +80,65 @@ export function EmptyState({
 }
 
 export function ErrorBanner({ message }: { message: string }) {
-  return <div className="error-banner">{message}</div>;
+  return (
+    <div className="error-banner" role="alert">
+      {message}
+    </div>
+  );
+}
+
+export function ConfirmationDialog({
+  open,
+  title,
+  body,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm(): void;
+  onCancel(): void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  return (
+    <dialog
+      ref={ref}
+      className="confirmation-dialog"
+      aria-labelledby="confirmation-title"
+      aria-describedby="confirmation-body"
+      onCancel={(event) => {
+        event.preventDefault();
+        onCancel();
+      }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div className="dialog-card">
+        <h2 id="confirmation-title">{title}</h2>
+        <p id="confirmation-body">{body}</p>
+        <div className="dialog-actions">
+          <button className="button ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="button danger" onClick={onConfirm} autoFocus>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
 }
 
 export function StatusDot({ state }: { state: string }) {
