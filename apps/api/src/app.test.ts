@@ -124,6 +124,38 @@ describe("server lifecycle actions", () => {
   });
 });
 
+describe("Docker logs", () => {
+  it("returns retained logs and clamps oversized tail requests", async () => {
+    let requestedTail: number | undefined;
+    const docker = {
+      logs: async (_id: string, _paths: unknown, tail: number | undefined) => {
+        requestedTail = tail;
+        return {
+          stdout: "2026-07-16T12:00:00Z server stopped\n",
+          stderr: "",
+          code: 0,
+        };
+      },
+    } as unknown as ComposeManager;
+    const { app, store, serverId, sessionToken } = await fixture(docker);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/servers/${serverId}/logs?tail=999999`,
+      headers: { cookie: `ms_session=${sessionToken}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(requestedTail).toBe(5000);
+    expect(response.json()).toEqual({
+      logs: "2026-07-16T12:00:00Z server stopped\n",
+    });
+
+    await app.close();
+    store.db.close();
+  });
+});
+
 afterEach(async () => {
   config.instancesRoot = originalInstancesRoot;
   config.tempRoot = originalTempRoot;

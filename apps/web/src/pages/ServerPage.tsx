@@ -7,6 +7,7 @@ import {
   FolderTree,
   LayoutDashboard,
   RefreshCw,
+  ScrollText,
   Settings,
   SquareTerminal,
   TriangleAlert,
@@ -21,10 +22,12 @@ import { AddonsTab } from "./server/AddonsTab";
 import { BackupsTab } from "./server/BackupsTab";
 import { SettingsTab } from "./server/SettingsTab";
 import { FilesTab } from "./server/FilesTab";
+import { DockerLogsTab } from "./server/DockerLogsTab";
 
 const tabs = [
   ["overview", "Overview", LayoutDashboard],
   ["console", "Console", SquareTerminal],
+  ["docker-logs", "Docker logs", ScrollText],
   ["addons", "Add-ons", Boxes],
   ["files", "Files", FolderTree],
   ["backups", "Backups", DatabaseBackup],
@@ -94,7 +97,7 @@ export function ServerPage() {
           </span>
           <button
             className="button ghost"
-            onClick={() => setSearch({ tab: "console" })}
+            onClick={() => setSearch({ tab: "docker-logs" })}
           >
             View logs
           </button>
@@ -122,6 +125,7 @@ export function ServerPage() {
       </nav>
       {tab === "overview" && <OverviewTab server={server} refresh={load} />}
       {tab === "console" && <ConsoleTab server={server} />}
+      {tab === "docker-logs" && <DockerLogsTab server={server} />}
       {tab === "addons" && <AddonsTab server={server} />}
       {tab === "files" && <FilesTab server={server} />}
       {tab === "backups" && <BackupsTab server={server} refreshServer={load} />}

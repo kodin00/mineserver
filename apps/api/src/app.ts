@@ -493,15 +493,23 @@ export async function buildApp(context: AppContext) {
     },
   );
 
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { tail?: string } }>(
     "/api/servers/:id/logs",
     async (request) => {
       const row = store.getServer(request.params.id);
       if (!row)
         throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const requestedTail = Number.parseInt(request.query.tail ?? "1000", 10);
+      const tail = Number.isFinite(requestedTail)
+        ? Math.min(Math.max(requestedTail, 50), 5000)
+        : 1000;
       return {
         logs: (
-          await docker.logs(row.id, instancePaths(config.instancesRoot, row.id))
+          await docker.logs(
+            row.id,
+            instancePaths(config.instancesRoot, row.id),
+            tail,
+          )
         ).stdout,
       };
     },

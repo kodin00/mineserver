@@ -106,7 +106,7 @@ export class ComposeManager {
     return this.run(
       id,
       paths,
-      ["logs", "--no-color", "--tail", String(tail), "mc"],
+      ["logs", "--no-color", "--timestamps", "--tail", String(tail), "mc"],
       30_000,
     );
   }

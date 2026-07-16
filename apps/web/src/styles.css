@@ -797,6 +797,45 @@ textarea {
   align-items: center;
   gap: 8px;
 }
+.docker-logs-toolbar {
+  height: auto;
+  min-height: 58px;
+  gap: 16px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.docker-logs-toolbar > div:first-child {
+  min-width: 0;
+}
+.docker-logs-toolbar small {
+  display: block;
+  margin-top: 4px;
+  color: #68776c;
+  font-size: 9px;
+}
+.docker-log-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+}
+.docker-log-actions small {
+  margin: 0;
+  white-space: nowrap;
+}
+.docker-log-actions .button {
+  min-height: 34px;
+}
+.docker-log-terminal {
+  height: min(62vh, 640px);
+}
+.docker-log-footnote {
+  padding: 9px 17px;
+  color: #68776c;
+  background: #0c110d;
+  border-top: 1px solid #202b23;
+  font-size: 9px;
+}
 .terminal {
   height: min(58vh, 580px);
   overflow: auto;
@@ -1359,6 +1398,14 @@ label small {
   }
   .runtime-error-banner .button {
     width: 100%;
+  }
+  .docker-logs-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .docker-log-actions {
+    width: 100%;
+    justify-content: space-between;
   }
   .addon-actions,
   .addon-actions label {

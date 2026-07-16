@@ -127,4 +127,21 @@ describe("compose lifecycle commands", () => {
       },
     });
   });
+
+  it("reads a timestamped bounded Docker log tail", async () => {
+    const docker = new RecordingComposeManager();
+    await docker.logs(
+      "abc",
+      instancePaths("/opt/mineserver/instances", "abc"),
+      1000,
+    );
+    expect(docker.calls[0]).toEqual([
+      "logs",
+      "--no-color",
+      "--timestamps",
+      "--tail",
+      "1000",
+      "mc",
+    ]);
+  });
 });
