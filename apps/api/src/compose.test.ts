@@ -45,6 +45,57 @@ describe("compose generation", () => {
     const document = YAML.parse(renderCompose("abc", base, paths));
     expect(document.services.mc.restart).toBe("on-failure:1");
   });
+
+  it("puts a lightweight Minecraft proxy on the host port when auto-sleep is enabled", () => {
+    const paths = instancePaths("/opt/mineserver/instances", "abc");
+    const document = YAML.parse(
+      renderCompose(
+        "abc",
+        {
+          ...base,
+          autoSleep: { enabled: true, idleMinutes: 15 },
+        },
+        paths,
+      ),
+    );
+    expect(document.services.mc.ports).toBeUndefined();
+    expect(document.services.mc.restart).toBe("no");
+    expect(document.services.mc.labels["lazymc.enabled"]).toBe("true");
+    expect(document.services.mc.labels["lazymc.time.sleep_after"]).toBe("900");
+    expect(document.services.mc.labels["lazymc.join.methods"]).toBe(
+      "hold,kick",
+    );
+    expect(document.services.sleep_proxy.ports).toEqual(["25565:25565"]);
+    expect(document.services.sleep_proxy.volumes).toContain(
+      "/var/run/docker.sock:/var/run/docker.sock:ro",
+    );
+    expect(document.networks.minecraft.ipam.config[0].subnet).toMatch(
+      /^10\.(?:\d{1,3}\.){2}\d+\/29$/,
+    );
+  });
+
+  it("carries whitelist and Forge handshake rules into the wake proxy", () => {
+    const paths = instancePaths("/opt/mineserver/instances", "abc");
+    const document = YAML.parse(
+      renderCompose(
+        "abc",
+        {
+          ...base,
+          type: "FORGE",
+          whitelist: ["Alex"],
+          autoSleep: { enabled: true, idleMinutes: 10 },
+        },
+        paths,
+      ),
+    );
+    expect(document.services.mc.labels["lazymc.server.forge"]).toBe("true");
+    expect(document.services.mc.labels["lazymc.server.wake_whitelist"]).toBe(
+      "true",
+    );
+    expect(document.services.mc.labels["lazymc.server.block_banned_ips"]).toBe(
+      "true",
+    );
+  });
 });
 
 describe("compose lifecycle commands", () => {
@@ -72,7 +123,6 @@ describe("compose lifecycle commands", () => {
       "-d",
       "--no-recreate",
       "--no-build",
-      "mc",
     ]);
   });
 
@@ -125,6 +175,45 @@ describe("compose lifecycle commands", () => {
         restartCount: 1,
         occurredAt: "2026-07-16T12:00:00Z",
       },
+    });
+  });
+
+  it("distinguishes an active wake proxy from a fully stopped project", async () => {
+    class SleepingServerManager extends ComposeManager {
+      override run(
+        _id: string,
+        _paths: ReturnType<typeof instancePaths>,
+        rest: string[],
+      ) {
+        const service = rest.at(-1);
+        return Promise.resolve({
+          stdout:
+            service === "sleep_proxy"
+              ? JSON.stringify({ State: "running" })
+              : JSON.stringify({
+                  ID: "container-id",
+                  State: "exited",
+                  ExitCode: 0,
+                }),
+          stderr: "",
+          code: 0,
+        });
+      }
+
+      protected override async inspect() {
+        return { State: { Status: "exited", ExitCode: 0 }, RestartCount: 0 };
+      }
+    }
+
+    const status = await new SleepingServerManager().status(
+      "abc",
+      instancePaths("/opt/mineserver/instances", "abc"),
+      true,
+    );
+    expect(status).toMatchObject({
+      state: "stopped",
+      exists: true,
+      wakeProxyRunning: true,
     });
   });
 

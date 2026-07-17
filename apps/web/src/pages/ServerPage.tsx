@@ -71,7 +71,10 @@ export function ServerPage() {
       actions={
         <>
           <span className={`header-status status-${server.state}`}>
-            <StatusDot state={server.state} /> {server.state}
+            <StatusDot state={server.state} />{" "}
+            {server.state === "stopped" && server.wakeProxyRunning
+              ? "sleeping"
+              : server.state}
           </span>
           <button className="button ghost" onClick={() => void load()}>
             <RefreshCw size={17} /> Refresh
