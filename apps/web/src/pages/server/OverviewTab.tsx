@@ -85,7 +85,11 @@ export function OverviewTab({
         <div>
           <h2>Power controls</h2>
           <p>
-            Commands are queued and run through this server’s Compose project.
+            {server.config.autoSleep.enabled && !server.wakeProxyRunning
+              ? "Wake-on-join is configured, but its listener is stopped. Run the server to activate it."
+              : server.config.autoSleep.enabled
+                ? `Wake-on-join is enabled; the game container sleeps after ${server.config.autoSleep.idleMinutes} empty minute${server.config.autoSleep.idleMinutes === 1 ? "" : "s"}.`
+                : "Commands are queued and run through this server’s Compose project."}
           </p>
         </div>
         <div className="button-row">
@@ -161,7 +165,11 @@ export function OverviewTab({
           </span>
           <div>
             <small>Status</small>
-            <strong>{server.health || server.state}</strong>
+            <strong>
+              {server.state === "stopped" && server.wakeProxyRunning
+                ? "sleeping"
+                : server.health || server.state}
+            </strong>
           </div>
         </div>
         <div className="metric-card">

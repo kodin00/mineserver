@@ -235,6 +235,50 @@ export function ServerForm({
 
       <section className="form-section">
         <div className="section-heading">
+          <h2>On-demand server</h2>
+          <p>
+            Keep a lightweight Minecraft listener online while the game
+            container sleeps.
+          </p>
+        </div>
+        <div className="form-grid">
+          <label className="toggle-row span-2">
+            <span>Sleep when nobody is playing and wake on join</span>
+            <input
+              type="checkbox"
+              checked={value.autoSleep.enabled}
+              onChange={(event) =>
+                set("autoSleep", {
+                  ...value.autoSleep,
+                  enabled: event.target.checked,
+                })
+              }
+            />
+          </label>
+          <label>
+            Empty server timeout (minutes)
+            <input
+              type="number"
+              min={1}
+              max={7 * 24 * 60}
+              disabled={!value.autoSleep.enabled}
+              value={value.autoSleep.idleMinutes}
+              onChange={(event) =>
+                set("autoSleep", {
+                  ...value.autoSleep,
+                  idleMinutes: Number(event.target.value),
+                })
+              }
+            />
+            <small>
+              The first join wakes the server. Startup can take up to a minute.
+            </small>
+          </label>
+        </div>
+      </section>
+
+      <section className="form-section">
+        <div className="section-heading">
           <h2>World and gameplay</h2>
           <p>Player-facing rules written into server.properties.</p>
         </div>

@@ -90,7 +90,9 @@ export function DashboardPage() {
                   <h2>{server.config.name}</h2>
                   <span className={`status-label status-${server.state}`}>
                     <StatusDot state={server.state} />
-                    {server.state}
+                    {server.state === "stopped" && server.wakeProxyRunning
+                      ? "sleeping"
+                      : server.state}
                   </span>
                 </div>
                 <ChevronRight className="chevron" size={19} />
