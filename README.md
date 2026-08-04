@@ -38,13 +38,13 @@ For remote access, put it behind an HTTPS reverse proxy, set `COOKIE_SECURE=true
 
 Edit `.env` before starting the panel to change these values:
 
-| Setting | Default | What it changes |
-| --- | --- | --- |
-| `ADMIN_PASSWORD` | required | Password used to sign in. |
-| `PANEL_PORT` | `8080` | Port used to open the panel. |
+| Setting                | Default           | What it changes                                   |
+| ---------------------- | ----------------- | ------------------------------------------------- |
+| `ADMIN_PASSWORD`       | required          | Password used to sign in.                         |
+| `PANEL_PORT`           | `8080`            | Port used to open the panel.                      |
 | `MINESERVER_DATA_ROOT` | `/opt/mineserver` | Where worlds, backups, and panel data are stored. |
-| `TZ` | `Asia/Jakarta` | Time zone used for scheduled backups. |
-| `COOKIE_SECURE` | `false` | Set to `true` when using HTTPS. |
+| `TZ`                   | `Asia/Jakarta`    | Time zone used for scheduled backups.             |
+| `COOKIE_SECURE`        | `false`           | Set to `true` when using HTTPS.                   |
 
 After changing settings, restart the panel:
 
@@ -57,11 +57,25 @@ Changing `ADMIN_PASSWORD` after the first login does not change the existing pas
 ## What you can do in the panel
 
 - Run Vanilla, Paper, Fabric, Forge, or NeoForge servers
+- Sleep empty servers after a configurable delay and wake them when a player joins
 - Start, stop, and restart servers; view live logs; send console commands
 - Upload Paper plugins or mod-loader mods as JAR files or ZIP archives
 - Browse and safely edit server configuration files
 - Create, download, schedule, restore, and retain ZIP backups
 - Create one-time download links for installed add-ons
+
+## Wake on join
+
+Enable **Sleep when nobody is playing and wake on join** in a server's
+settings, choose the empty-server timeout, then apply the pending change. The
+panel puts a small Minecraft-aware proxy on that server's host port and keeps
+the full game container off while it is empty. A player can use the same
+address as before; their first connection starts the game container.
+
+The proxy needs access to the Docker socket to start and gracefully stop its
+managed game container. Keep the host port limited to the networks or players
+that should be able to wake the server. The initial connection may show a
+starting message or require one retry while Minecraft finishes booting.
 
 ## Updating
 

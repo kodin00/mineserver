@@ -49,6 +49,17 @@ export const BackupSettingsSchema = z.object({
 });
 export type BackupSettings = z.infer<typeof BackupSettingsSchema>;
 
+export const AutoSleepSettingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  idleMinutes: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(7 * 24 * 60)
+    .default(10),
+});
+export type AutoSleepSettings = z.infer<typeof AutoSleepSettingsSchema>;
+
 export const ServerConfigSchema = z
   .object({
     name: z.string().trim().min(1).max(64),
@@ -78,6 +89,10 @@ export const ServerConfigSchema = z
       cron: "0 4 * * *",
       retainDays: 7,
       retainCount: 14,
+    }),
+    autoSleep: AutoSleepSettingsSchema.default({
+      enabled: false,
+      idleMinutes: 10,
     }),
   })
   .superRefine((value, ctx) => {
@@ -151,6 +166,7 @@ export interface ServerSummary {
   state: ServerState;
   health?: string;
   containerExists: boolean;
+  wakeProxyRunning?: boolean;
   runtimeError?: {
     message: string;
     exitCode: number | null;

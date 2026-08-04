@@ -87,19 +87,24 @@ async function serverSummary(
   row: ServerRow,
   docker: ComposeManager,
 ): Promise<ServerSummary> {
+  const serverConfig = rowConfig(row);
   const runtime = await docker.status(
     row.id,
     instancePaths(config.instancesRoot, row.id),
+    serverConfig.autoSleep.enabled,
   );
   return {
     id: row.id,
     slug: row.slug,
-    config: rowConfig(row),
+    config: serverConfig,
     revision: row.revision,
     appliedRevision: row.applied_revision,
     restartRequired: row.revision !== row.applied_revision,
     state: runtime.state,
     containerExists: runtime.exists,
+    ...(runtime.wakeProxyRunning !== undefined
+      ? { wakeProxyRunning: runtime.wakeProxyRunning }
+      : {}),
     ...(runtime.health ? { health: runtime.health } : {}),
     ...(runtime.runtimeError ? { runtimeError: runtime.runtimeError } : {}),
     createdAt: row.created_at,

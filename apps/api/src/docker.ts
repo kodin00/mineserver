@@ -8,6 +8,7 @@ export interface RuntimeStatus {
   state: ServerState;
   health?: string;
   exists: boolean;
+  wakeProxyRunning?: boolean;
   runtimeError?: {
     message: string;
     exitCode: number | null;
@@ -62,12 +63,12 @@ export class ComposeManager {
     );
   }
 
-  /** Start the current container without applying Compose file changes. */
+  /** Start the current Compose services without applying file changes. */
   startExisting(id: string, paths: InstancePaths) {
     return this.run(
       id,
       paths,
-      ["up", "-d", "--no-recreate", "--no-build", "mc"],
+      ["up", "-d", "--no-recreate", "--no-build"],
       10 * 60_000,
     );
   }
@@ -151,7 +152,38 @@ export class ComposeManager {
     );
   }
 
-  async status(id: string, paths: InstancePaths): Promise<RuntimeStatus> {
+  private async serviceRunning(
+    id: string,
+    paths: InstancePaths,
+    service: string,
+  ): Promise<boolean> {
+    try {
+      const result = await this.run(
+        id,
+        paths,
+        ["ps", "--all", "--format", "json", service],
+        10_000,
+      );
+      const raw = result.stdout.trim();
+      if (!raw) return false;
+      const parsed = JSON.parse(raw.split("\n")[0]!);
+      const value = Array.isArray(parsed) ? parsed[0] : parsed;
+      return String(value?.State ?? "").toLowerCase() === "running";
+    } catch {
+      return false;
+    }
+  }
+
+  async status(
+    id: string,
+    paths: InstancePaths,
+    includeWakeProxy = false,
+  ): Promise<RuntimeStatus> {
+    const proxyStatus = includeWakeProxy
+      ? {
+          wakeProxyRunning: await this.serviceRunning(id, paths, "sleep_proxy"),
+        }
+      : {};
     try {
       const result = await this.run(
         id,
@@ -159,7 +191,8 @@ export class ComposeManager {
         ["ps", "--all", "--format", "json", "mc"],
         10_000,
       );
-      if (!result.stdout.trim()) return { state: "stopped", exists: false };
+      if (!result.stdout.trim())
+        return { state: "stopped", exists: false, ...proxyStatus };
       const raw = result.stdout.trim();
       let value: any;
       try {
@@ -208,24 +241,27 @@ export class ComposeManager {
           }
         : undefined;
       if (rawState === "running" && health === "unhealthy")
-        return { state: "unhealthy", health, exists: true };
+        return { state: "unhealthy", health, exists: true, ...proxyStatus };
       if (rawState === "running")
         return {
           state: "running",
           exists: true,
           ...(health ? { health } : {}),
+          ...proxyStatus,
         };
       if (rawState === "restarting" || rawState === "created")
         return {
           state: "starting",
           exists: true,
           ...(health ? { health } : {}),
+          ...proxyStatus,
         };
       return {
         state: rawState === "exited" ? "stopped" : "unknown",
         exists: true,
         ...(health ? { health } : {}),
         ...(runtimeError ? { runtimeError } : {}),
+        ...proxyStatus,
       };
     } catch (error: any) {
       if (
@@ -233,9 +269,9 @@ export class ComposeManager {
           String(error?.message),
         )
       ) {
-        return { state: "stopped", exists: false };
+        return { state: "stopped", exists: false, ...proxyStatus };
       }
-      return { state: "unknown", exists: false };
+      return { state: "unknown", exists: false, ...proxyStatus };
     }
   }
 

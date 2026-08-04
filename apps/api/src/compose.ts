@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { chmod, chown, mkdir, writeFile } from "node:fs/promises";
 import YAML from "yaml";
 import {
@@ -60,6 +61,20 @@ function containerMemoryLimit(maxMemory: string): string | undefined {
   return `${Math.ceil(mebibytes * 1.25)}M`;
 }
 
+function sleepNetwork(id: string) {
+  const digest = createHash("sha256").update(id).digest();
+  const network = digest.readUInt32BE(0) & 0x1fffff;
+  const second = (network >> 13) & 0xff;
+  const third = (network >> 5) & 0xff;
+  const fourth = (network & 0x1f) * 8;
+  const prefix = `10.${second}.${third}.${fourth}`;
+  return {
+    subnet: `${prefix}/29`,
+    proxyAddress: `10.${second}.${third}.${fourth + 2}`,
+    serverAddress: `10.${second}.${third}.${fourth + 3}`,
+  };
+}
+
 export function environmentFor(config: ServerConfig): Record<string, string> {
   const environment: Record<string, string> = {
     EULA: "TRUE",
@@ -106,37 +121,95 @@ export function renderCompose(
 ): string {
   const kind = addonKind(config.type);
   const memoryLimit = containerMemoryLimit(config.maxMemory);
+  const autoSleep = config.autoSleep.enabled;
+  const network = sleepNetwork(id);
   const volumes = [`${paths.data}:/data`];
   if (kind) volumes.push(`${paths.addons}:/${kind}:ro`);
 
+  const minecraft = {
+    image: `itzg/minecraft-server:${config.javaTag || automaticJavaTag(config.version)}`,
+    ...(memoryLimit ? { mem_limit: memoryLimit } : {}),
+    // The sleep proxy owns restarts when enabled. Otherwise retry one
+    // unexpected failure, then leave a broken server stopped.
+    restart: autoSleep ? "no" : "on-failure:1",
+    tty: true,
+    stdin_open: true,
+    ...(!autoSleep ? { ports: [`${config.port}:25565`] } : {}),
+    environment: environmentFor(config),
+    volumes,
+    secrets: ["rcon_password"],
+    healthcheck: {
+      test: ["CMD", "mc-health"],
+      interval: "10s",
+      timeout: "5s",
+      retries: 12,
+      start_period: "60s",
+    },
+    labels: {
+      "app.mineserver.managed": "true",
+      "app.mineserver.instance": id,
+      ...(autoSleep
+        ? {
+            "lazymc.enabled": "true",
+            "lazymc.group": `mineserver-${id}`,
+            "lazymc.server.address": "mc:25565",
+            "lazymc.server.directory": "/server",
+            "lazymc.server.wake_whitelist": String(config.whitelist.length > 0),
+            "lazymc.server.block_banned_ips": "true",
+            ...(["FORGE", "NEOFORGE"].includes(config.type)
+              ? { "lazymc.server.forge": "true" }
+              : {}),
+            "lazymc.time.sleep_after": String(
+              config.autoSleep.idleMinutes * 60,
+            ),
+            "lazymc.time.minimum_online_time": "60",
+            "lazymc.join.methods": "hold,kick",
+            "lazymc.join.hold.timeout": "25",
+            "lazymc.join.kick.starting":
+              "Server is waking up. Please reconnect in a minute.",
+            "lazymc.motd.sleeping": "Server is sleeping — join to wake it",
+            "lazymc.motd.starting": "Server is waking up…",
+          }
+        : {}),
+    },
+    ...(autoSleep
+      ? { networks: { minecraft: { ipv4_address: network.serverAddress } } }
+      : {}),
+  };
+
+  const services: Record<string, unknown> = { mc: minecraft };
+  if (autoSleep) {
+    services.sleep_proxy = {
+      image: "ghcr.io/joesturge/lazymc-docker-proxy:latest",
+      restart: "unless-stopped",
+      depends_on: ["mc"],
+      ports: [`${config.port}:25565`],
+      volumes: [
+        "/var/run/docker.sock:/var/run/docker.sock:ro",
+        `${paths.data}:/server:ro`,
+      ],
+      networks: { minecraft: { ipv4_address: network.proxyAddress } },
+      labels: {
+        "app.mineserver.managed": "true",
+        "app.mineserver.instance": id,
+        "app.mineserver.role": "sleep-proxy",
+      },
+    };
+  }
+
   const document = {
     name: `mineserver-${id}`,
-    services: {
-      mc: {
-        image: `itzg/minecraft-server:${config.javaTag || automaticJavaTag(config.version)}`,
-        ...(memoryLimit ? { mem_limit: memoryLimit } : {}),
-        // Retry one unexpected failure, then leave the container stopped so a
-        // broken server cannot enter an unbounded restart loop.
-        restart: "on-failure:1",
-        tty: true,
-        stdin_open: true,
-        ports: [`${config.port}:25565`],
-        environment: environmentFor(config),
-        volumes,
-        secrets: ["rcon_password"],
-        healthcheck: {
-          test: ["CMD", "mc-health"],
-          interval: "10s",
-          timeout: "5s",
-          retries: 12,
-          start_period: "60s",
-        },
-        labels: {
-          "app.mineserver.managed": "true",
-          "app.mineserver.instance": id,
-        },
-      },
-    },
+    services,
+    ...(autoSleep
+      ? {
+          networks: {
+            minecraft: {
+              driver: "bridge",
+              ipam: { config: [{ subnet: network.subnet }] },
+            },
+          },
+        }
+      : {}),
     secrets: {
       rcon_password: { file: paths.rconSecret },
     },

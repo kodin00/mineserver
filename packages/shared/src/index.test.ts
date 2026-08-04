@@ -33,6 +33,17 @@ describe("server config", () => {
     expect(result.serverIconUrl).toBe("https://example.com/server-icon.png");
   });
 
+  it("adds migration-safe auto-sleep defaults and validates the idle timeout", () => {
+    const existing = ServerConfigSchema.parse({ name: "Existing server" });
+    expect(existing.autoSleep).toEqual({ enabled: false, idleMinutes: 10 });
+    expect(
+      ServerConfigSchema.safeParse({
+        name: "Test",
+        autoSleep: { enabled: true, idleMinutes: 0 },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects non-URL server icon values", () => {
     const result = ServerConfigSchema.safeParse({
       name: "Test",
