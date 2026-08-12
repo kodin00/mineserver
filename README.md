@@ -2,6 +2,7 @@
 
 
 
+
 Run and manage multiple Minecraft Java servers from one simple web panel. Create servers, view logs, run console commands, install mods or plugins, and make backups—all from your browser.
 
 ## Quick start
