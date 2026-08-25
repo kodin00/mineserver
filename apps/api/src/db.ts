@@ -12,6 +12,25 @@ export interface ServerRow {
   updated_at: string;
 }
 
+export interface PanelSettingsRow {
+  modrinth_enabled: number;
+  modrinth_contact: string;
+  modrinth_token: string | null;
+  modrinth_token_updated_at: string | null;
+}
+
+export interface AddonSourceRow {
+  server_id: string;
+  filename: string;
+  provider: string;
+  project_id: string;
+  project_title: string;
+  version_id: string;
+  version_number: string;
+  sha512: string;
+  installed_at: string;
+}
+
 export class Store {
   readonly db: DatabaseSync;
 
@@ -64,9 +83,29 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_operations_server_created
         ON operations(server_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS addon_sources (
+        server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        filename TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        project_title TEXT NOT NULL,
+        version_id TEXT NOT NULL,
+        version_number TEXT NOT NULL,
+        sha512 TEXT NOT NULL,
+        installed_at TEXT NOT NULL,
+        PRIMARY KEY (server_id, filename)
+      );
+      CREATE TABLE IF NOT EXISTS panel_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        modrinth_enabled INTEGER NOT NULL,
+        modrinth_contact TEXT NOT NULL DEFAULT '',
+        modrinth_token TEXT,
+        modrinth_token_updated_at TEXT,
+        updated_at TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_addon_share_tokens_expires
         ON addon_share_tokens(expires_at);
-      PRAGMA user_version=2;
+      PRAGMA user_version=4;
     `);
   }
 
@@ -139,6 +178,117 @@ export class Store {
          RETURNING server_id`,
       )
       .get(tokenHash, now) as { server_id: string } | undefined;
+  }
+
+  /**
+   * Settings are seeded once from the environment so an existing deployment
+   * keeps its behaviour, and the stored row is authoritative afterwards.
+   */
+  getPanelSettings(seedEnabled: boolean): PanelSettingsRow {
+    const existing = this.db
+      .prepare(
+        `SELECT modrinth_enabled,modrinth_contact,modrinth_token,
+                modrinth_token_updated_at
+           FROM panel_settings WHERE id=1`,
+      )
+      .get() as unknown as PanelSettingsRow | undefined;
+    if (existing) return existing;
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO panel_settings(
+           id,modrinth_enabled,modrinth_contact,modrinth_token,
+           modrinth_token_updated_at,updated_at
+         ) VALUES(1,?,'',NULL,NULL,?)`,
+      )
+      .run(seedEnabled ? 1 : 0, now);
+    return {
+      modrinth_enabled: seedEnabled ? 1 : 0,
+      modrinth_contact: "",
+      modrinth_token: null,
+      modrinth_token_updated_at: null,
+    };
+  }
+
+  updatePanelSettings(update: {
+    enabled: boolean;
+    contact: string;
+    // undefined leaves the stored token untouched; null clears it.
+    token?: string | null;
+  }) {
+    const now = new Date().toISOString();
+    this.getPanelSettings(update.enabled);
+    if (update.token === undefined) {
+      this.db
+        .prepare(
+          `UPDATE panel_settings
+              SET modrinth_enabled=?, modrinth_contact=?, updated_at=?
+            WHERE id=1`,
+        )
+        .run(update.enabled ? 1 : 0, update.contact, now);
+      return;
+    }
+    const token =
+      update.token === null || update.token === "" ? null : update.token;
+    this.db
+      .prepare(
+        `UPDATE panel_settings
+            SET modrinth_enabled=?, modrinth_contact=?, modrinth_token=?,
+                modrinth_token_updated_at=?, updated_at=?
+          WHERE id=1`,
+      )
+      .run(
+        update.enabled ? 1 : 0,
+        update.contact,
+        token,
+        token ? now : null,
+        now,
+      );
+  }
+
+  recordAddonSource(entry: AddonSourceRow) {
+    this.db
+      .prepare(
+        `INSERT INTO addon_sources(
+           server_id,filename,provider,project_id,project_title,
+           version_id,version_number,sha512,installed_at
+         ) VALUES(?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(server_id,filename) DO UPDATE SET
+           provider=excluded.provider,
+           project_id=excluded.project_id,
+           project_title=excluded.project_title,
+           version_id=excluded.version_id,
+           version_number=excluded.version_number,
+           sha512=excluded.sha512,
+           installed_at=excluded.installed_at`,
+      )
+      .run(
+        entry.server_id,
+        entry.filename,
+        entry.provider,
+        entry.project_id,
+        entry.project_title,
+        entry.version_id,
+        entry.version_number,
+        entry.sha512,
+        entry.installed_at,
+      );
+  }
+
+  listAddonSources(serverId: string): AddonSourceRow[] {
+    return this.db
+      .prepare(
+        `SELECT server_id,filename,provider,project_id,project_title,
+                version_id,version_number,sha512,installed_at
+           FROM addon_sources WHERE server_id=? ORDER BY filename`,
+      )
+      .all(serverId) as unknown as AddonSourceRow[];
+  }
+
+  deleteAddonSource(serverId: string, filename: string) {
+    this.db
+      .prepare("DELETE FROM addon_sources WHERE server_id=? AND filename=?")
+      .run(serverId, filename);
   }
 
   pruneAddonShares() {

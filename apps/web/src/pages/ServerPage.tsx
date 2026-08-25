@@ -6,6 +6,7 @@ import {
   DatabaseBackup,
   FolderTree,
   LayoutDashboard,
+  PackageSearch,
   RefreshCw,
   ScrollText,
   Settings,
@@ -19,6 +20,7 @@ import { ErrorBanner, Layout, StatusDot } from "../components/Layout";
 import { OverviewTab } from "./server/OverviewTab";
 import { ConsoleTab } from "./server/ConsoleTab";
 import { AddonsTab } from "./server/AddonsTab";
+import { BrowseTab } from "./server/BrowseTab";
 import { BackupsTab } from "./server/BackupsTab";
 import { SettingsTab } from "./server/SettingsTab";
 import { FilesTab } from "./server/FilesTab";
@@ -29,6 +31,7 @@ const tabs = [
   ["console", "Console", SquareTerminal],
   ["docker-logs", "Docker logs", ScrollText],
   ["addons", "Add-ons", Boxes],
+  ["browse", "Browse", PackageSearch],
   ["files", "Files", FolderTree],
   ["backups", "Backups", DatabaseBackup],
   ["settings", "Settings", Settings],
@@ -39,7 +42,21 @@ export function ServerPage() {
   const [search, setSearch] = useSearchParams();
   const tab = search.get("tab") ?? "overview";
   const [server, setServer] = useState<ServerSummary | null>(null);
+  const [marketplaceEnabled, setMarketplaceEnabled] = useState(true);
   const [error, setError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    void api<{ modrinthEnabled?: boolean }>("/api/metadata")
+      .then((metadata) => {
+        if (!cancelled)
+          setMarketplaceEnabled(metadata.modrinthEnabled !== false);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const load = useCallback(async () => {
     try {
       setServer(await api<ServerSummary>(`/api/servers/${id}`));
@@ -64,6 +81,10 @@ export function ServerPage() {
       </Layout>
     );
   }
+  const visibleTabs = marketplaceEnabled
+    ? tabs
+    : tabs.filter(([key]) => key !== "browse");
+
   return (
     <Layout
       title={server.config.name}
@@ -116,7 +137,7 @@ export function ServerPage() {
         </div>
       )}
       <nav className="tabs">
-        {tabs.map(([key, label, Icon]) => (
+        {visibleTabs.map(([key, label, Icon]) => (
           <button
             key={key}
             className={tab === key ? "active" : ""}
@@ -130,6 +151,9 @@ export function ServerPage() {
       {tab === "console" && <ConsoleTab server={server} />}
       {tab === "docker-logs" && <DockerLogsTab server={server} />}
       {tab === "addons" && <AddonsTab server={server} />}
+      {tab === "browse" && marketplaceEnabled && (
+        <BrowseTab server={server} refresh={load} />
+      )}
       {tab === "files" && <FilesTab server={server} />}
       {tab === "backups" && <BackupsTab server={server} refreshServer={load} />}
       {tab === "settings" && <SettingsTab server={server} refresh={load} />}

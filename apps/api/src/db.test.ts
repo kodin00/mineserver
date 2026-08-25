@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { ServerConfigSchema } from "@mineserver/shared";
+import { DatabaseSync } from "node:sqlite";
 import { Store } from "./db.js";
 
 const roots: string[] = [];
@@ -58,6 +59,102 @@ describe("one-time add-on shares", () => {
         )
         .get("expired-hash"),
     ).toEqual({ count: 0 });
+    store.db.close();
+  });
+});
+
+describe("schema upgrade from an existing panel database", () => {
+  it("adds the new tables to a user_version=2 database without losing data", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "mineserver-db-upgrade-"));
+    roots.push(root);
+    const file = path.join(root, "panel.sqlite");
+
+    // Recreate the pre-marketplace schema exactly as it shipped: the tables an
+    // existing deployment already has, at user_version=2, with real rows in it.
+    const legacy = new DatabaseSync(file);
+    legacy.exec(`
+      PRAGMA journal_mode=WAL;
+      CREATE TABLE administrator (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        password_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE sessions (
+        token_hash TEXT PRIMARY KEY,
+        csrf_token TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE servers (
+        id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        config_json TEXT NOT NULL,
+        applied_config_json TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1,
+        applied_revision INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE operations (
+        id TEXT PRIMARY KEY,
+        server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE addon_share_tokens (
+        token_hash TEXT PRIMARY KEY,
+        server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      PRAGMA user_version=2;
+    `);
+    legacy
+      .prepare(
+        `INSERT INTO servers(id,slug,config_json,applied_config_json,
+           revision,applied_revision,created_at,updated_at)
+         VALUES('legacy-1','legacy',?,?,3,3,'now','now')`,
+      )
+      .run(
+        JSON.stringify(ServerConfigSchema.parse({ name: "Legacy" })),
+        JSON.stringify(ServerConfigSchema.parse({ name: "Legacy" })),
+      );
+    legacy.close();
+
+    // Opening it with the current Store must migrate in place.
+    const store = new Store(file);
+    expect(store.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: 4,
+    });
+
+    // The pre-existing row survived, revision counters intact.
+    expect(store.getServer("legacy-1")).toMatchObject({
+      slug: "legacy",
+      revision: 3,
+    });
+
+    // Both new tables are usable straight away, with no manual step.
+    expect(store.listAddonSources("legacy-1")).toEqual([]);
+    store.recordAddonSource({
+      server_id: "legacy-1",
+      filename: "mod.jar",
+      provider: "modrinth",
+      project_id: "AABBCCDD",
+      project_title: "Mod",
+      version_id: "12345678",
+      version_number: "1.0.0",
+      sha512: "abc",
+      installed_at: "now",
+    });
+    expect(store.listAddonSources("legacy-1")).toHaveLength(1);
+    expect(store.getPanelSettings(true)).toMatchObject({
+      modrinth_enabled: 1,
+      modrinth_token: null,
+    });
     store.db.close();
   });
 });

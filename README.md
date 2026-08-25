@@ -1,10 +1,5 @@
 # Mineserver Panel
 
-
-
-
-
-
 Run and manage multiple Minecraft Java servers from one simple web panel. Create servers, view logs, run console commands, install mods or plugins, and make backups—all from your browser.
 
 ## Quick start
@@ -64,6 +59,7 @@ Changing `ADMIN_PASSWORD` after the first login does not change the existing pas
 - Run Vanilla, Paper, Fabric, Forge, or NeoForge servers
 - Sleep empty servers after a configurable delay and wake them when a player joins
 - Start, stop, and restart servers; view live logs; send console commands
+- Browse Modrinth from inside the panel and install mods, plugins, or datapacks in one click
 - Upload Paper plugins or mod-loader mods as JAR files or ZIP archives
 - Browse and safely edit server configuration files
 - Create, download, schedule, restore, and retain ZIP backups
@@ -81,6 +77,42 @@ The proxy needs access to the Docker socket to start and gracefully stop its
 managed game container. Keep the host port limited to the networks or players
 that should be able to wake the server. The initial connection may show a
 starting message or require one retry while Minecraft finishes booting.
+
+## Mod marketplace
+
+The **Browse** tab on a server searches [Modrinth](https://modrinth.com) filtered
+to that server's loader and Minecraft version, then downloads and verifies the
+file for you. Mods, plugins, and datapacks install directly. Resource packs and
+shaders are listed for reference only, because a Minecraft server has nowhere to
+install them.
+
+No account or API key is needed. The panel needs outbound HTTPS access to
+`api.modrinth.com` and `cdn.modrinth.com`.
+
+Everything optional is configured in the panel under **Settings**, not in
+`.env`:
+
+- **Enable the marketplace.** Turn it off for an air-gapped install and the
+  panel will not contact Modrinth at all. The Browse tab disappears.
+- **Contact details.** Sent in the User-Agent. Modrinth asks for this so they
+  can reach you about API usage instead of silently blocking the panel.
+- **Access token.** Only needed to reach projects that are private to your own
+  Modrinth account. It does **not** raise the rate limit, so leave it blank
+  unless you know you need it. The panel checks the token when you save it and
+  tells you whether Modrinth accepted it. The token is never shown again after
+  saving and is never sent to the file CDN.
+
+`MODRINTH_ENABLED` in `.env` only seeds the initial value on first run; after
+that the Settings page is authoritative. The remaining `MODRINTH_*` variables
+are deployment tuning (timeouts, request budget, size cap) and stay in `.env`.
+
+Modrinth allows 300 API requests per minute per IP address, shared by everyone
+using the panel. The panel keeps itself well under that, caches responses, and
+backs off on its own if Modrinth reports the budget is spent.
+
+Installed files land in the same place as uploaded ones, so a server restart is
+still required before they load. Datapacks additionally need `/reload` and
+`/datapack enable`, or a restart, before they take effect.
 
 ## Updating
 

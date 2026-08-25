@@ -1,3 +1,4 @@
+import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 
@@ -85,4 +86,31 @@ export async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Joins untrusted segments onto a root and refuses anything that escapes it.
+ * Used where a path component comes from a file the operator can edit, such as
+ * level-name in server.properties.
+ */
+export function resolveWithin(root: string, ...segments: string[]): string {
+  const resolvedRoot = path.resolve(root);
+  for (const segment of segments) {
+    if (
+      !segment ||
+      segment.includes("\0") ||
+      segment.includes("/") ||
+      segment.includes("\\") ||
+      segment === "." ||
+      segment === ".."
+    ) {
+      throw new Error("Invalid path segment");
+    }
+  }
+  const target = path.resolve(resolvedRoot, ...segments);
+  const relative = path.relative(resolvedRoot, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Invalid path segment");
+  }
+  return target;
 }

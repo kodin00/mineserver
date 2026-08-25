@@ -36,12 +36,18 @@ export class JobRunner extends EventEmitter {
       updatedAt: new Date().toISOString(),
     });
     try {
-      await task();
-      this.store.updateOperation(operation.id, "succeeded", "Completed");
+      const result = await task();
+      // A task may return a human-readable summary of what it did; anything
+      // else keeps the previous generic message.
+      const message =
+        typeof result === "string" && result.trim()
+          ? result.slice(0, 4000)
+          : "Completed";
+      this.store.updateOperation(operation.id, "succeeded", message);
       this.emit("operation", {
         ...operation,
         status: "succeeded",
-        message: "Completed",
+        message,
         updatedAt: new Date().toISOString(),
       });
     } catch (error: any) {

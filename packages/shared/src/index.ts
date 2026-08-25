@@ -1,14 +1,7 @@
 import { z } from "zod";
 
-export const serverTypes = [
-  "VANILLA",
-  "PAPER",
-  "FABRIC",
-  "FORGE",
-  "NEOFORGE",
-] as const;
-export const ServerTypeSchema = z.enum(serverTypes);
-export type ServerType = z.infer<typeof ServerTypeSchema>;
+export * from "./server-type.js";
+import { ServerTypeSchema, type ServerType } from "./server-type.js";
 
 export const gameModes = [
   "survival",
@@ -261,3 +254,5 @@ export function automaticJavaTag(version: string): string {
   if (minor === 17) return "java16";
   return "java8";
 }
+
+export * from "./modrinth.js";
