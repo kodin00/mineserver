@@ -6,6 +6,29 @@ Run and manage multiple Minecraft Java servers from one simple web panel. Create
 
 You need a Linux machine with [Docker Engine](https://docs.docker.com/engine/install/) and Docker Compose v2 installed.
 
+### Install from GHCR
+
+This uses the published images, so Docker does not need to build the project locally:
+
+```sh
+mkdir mineserver && cd mineserver
+curl -fsSLO https://raw.githubusercontent.com/kodin00/mineserver/master/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/kodin00/mineserver/master/.env.example
+cp .env.example .env
+```
+
+Open `.env` and replace `ADMIN_PASSWORD` with a unique password of at least 12 characters, then start the panel:
+
+```sh
+sudo mkdir -p /opt/mineserver
+docker compose pull
+docker compose up -d
+```
+
+Open `http://your-server-ip:8080` and sign in with the password from `.env`.
+
+### Install from source
+
 1. Download or clone this project onto the machine that will run your Minecraft servers.
 2. Create your settings file and choose a strong password:
 
@@ -116,7 +139,14 @@ still required before they load. Datapacks additionally need `/reload` and
 
 ## Updating
 
-From the project folder, pull the new version and rebuild:
+For a GHCR installation, pull the latest images and restart:
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+For a source installation, pull the new version and rebuild:
 
 ```sh
 git pull
