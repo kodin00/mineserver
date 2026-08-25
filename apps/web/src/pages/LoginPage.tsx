@@ -59,6 +59,11 @@ export function LoginPage() {
           {loading && <LoaderCircle className="spin" size={17} />}
           Sign in
         </button>
+        <p className="login-default-password">
+          Default password: <code>mineserver123!</code>. To use a different
+          password, set <code>ADMIN_PASSWORD</code> in <code>.env</code> before
+          the first start.
+        </p>
         <p className="login-footnote">
           Protected by a secure, host-local administrator session.
         </p>

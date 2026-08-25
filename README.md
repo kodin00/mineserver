@@ -4,7 +4,15 @@ Run and manage multiple Minecraft Java servers from one simple web panel. Create
 
 ## Quick start
 
-You need a Linux machine with [Docker Engine](https://docs.docker.com/engine/install/) and Docker Compose v2 installed.
+You need a Linux machine with [Docker Engine](https://docs.docker.com/engine/install/), Docker Compose v2, and `curl` installed.
+
+### One-line GHCR install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kodin00/mineserver/master/install.sh | sh
+```
+
+This creates a `mineserver` folder, downloads the Compose files, creates `/opt/mineserver`, then pulls and starts the GHCR images. The default password is `mineserver123!`; set `ADMIN_PASSWORD` in `mineserver/.env` before the first start if you want a different password.
 
 ### Install from GHCR
 
@@ -17,7 +25,7 @@ curl -fsSLO https://raw.githubusercontent.com/kodin00/mineserver/master/.env.exa
 cp .env.example .env
 ```
 
-Open `.env` and replace `ADMIN_PASSWORD` with a unique password of at least 12 characters, then start the panel:
+The default password is `mineserver123!`. To use a different password, set `ADMIN_PASSWORD` in `.env` before the first start, then start the panel:
 
 ```sh
 sudo mkdir -p /opt/mineserver
@@ -36,7 +44,8 @@ Open `http://your-server-ip:8080` and sign in with the password from `.env`.
    cp .env.example .env
    ```
 
-   Open `.env` and replace `ADMIN_PASSWORD` with a unique password of at least 12 characters.
+   The default password is `mineserver123!`. To use a different password, set
+   `ADMIN_PASSWORD` in `.env` before the first start.
 
 3. Start the panel:
 
@@ -63,7 +72,7 @@ Edit `.env` before starting the panel to change these values:
 
 | Setting                | Default           | What it changes                                   |
 | ---------------------- | ----------------- | ------------------------------------------------- |
-| `ADMIN_PASSWORD`       | required          | Password used to sign in.                         |
+| `ADMIN_PASSWORD`       | `mineserver123!`  | Password used to sign in.                         |
 | `PANEL_PORT`           | `8080`            | Port used to open the panel.                      |
 | `MINESERVER_DATA_ROOT` | `/opt/mineserver` | Where worlds, backups, and panel data are stored. |
 | `TZ`                   | `Asia/Jakarta`    | Time zone used for scheduled backups.             |

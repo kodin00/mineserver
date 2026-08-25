@@ -317,6 +317,19 @@ textarea {
   text-align: center;
   font-size: 11px !important;
 }
+.login-default-password {
+  margin: -8px 0 !important;
+  padding: 10px 12px;
+  border: 1px solid #725b24;
+  border-radius: 9px;
+  color: #e4c46e !important;
+  background: #2b2414;
+  font-size: 12px !important;
+  line-height: 1.5;
+}
+.login-default-password code {
+  color: #fff0b3;
+}
 
 .error-banner,
 .notice-banner {
