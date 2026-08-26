@@ -1,10 +1,24 @@
 import path from "node:path";
-import { rm, rmdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import {
+  chmod,
+  mkdir,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  stat,
+} from "node:fs/promises";
 import {
   marketplaceTargetFor,
+  type MarketplaceInventoryItem,
   type MarketplaceProjectType,
   type MarketplaceTarget,
   type ModrinthInstallPreview,
+  type MarketplaceUpdateCandidate,
+  type ModrinthUpdateInput,
+  type ModrinthUpdatePreview,
   type ModrinthPreviewEntry,
   type ModrinthVersionFile,
   type ModrinthVersionSummary,
@@ -20,19 +34,15 @@ import {
   listAddons,
   removeAddon,
 } from "./addons.js";
-import { installDatapack, resolveLevelName } from "./datapacks.js";
-
-// One marketplace install per server at a time. jobs.run is fire-and-forget
-// with no concurrency limit, so without this a burst of clicks becomes a burst
-// of simultaneous downloads. Mirrors the activeBackups guard in backups.ts.
-const activeInstalls = new Set<string>();
+import {
+  installDatapack,
+  listDatapacks,
+  resolveLevelName,
+} from "./datapacks.js";
+import { pathExists, resolveWithin } from "./utils.js";
 
 function httpError(message: string, statusCode: number) {
   return Object.assign(new Error(message), { statusCode });
-}
-
-export function isInstalling(serverId: string): boolean {
-  return activeInstalls.has(serverId);
 }
 
 /** Rejects a project type this server can never load, before any upstream call. */
@@ -123,6 +133,150 @@ async function installedFilenames(
     names: new Set(files.map((file) => file.name.toLowerCase())),
     sources: store.listAddonSources(serverId),
   };
+}
+
+async function sha512(filename: string): Promise<string> {
+  const digest = createHash("sha512");
+  const stream = createReadStream(filename);
+  for await (const chunk of stream) digest.update(chunk as Buffer);
+  return digest.digest("hex");
+}
+
+async function caseInsensitiveEntry(
+  directory: string,
+  filename: string,
+): Promise<string | null> {
+  const key = filename.toLowerCase();
+  const entries = await readdir(directory, { withFileTypes: true }).catch(
+    () => [],
+  );
+  return (
+    entries.find((entry) => entry.name.toLowerCase() === key)?.name ?? null
+  );
+}
+
+function sourcePath(context: ResolveContext, source: AddonSourceRow): string {
+  if (source.target === "addons") {
+    return resolveWithin(context.paths.addons, source.filename);
+  }
+  if (!source.level_name) throw new Error("Datapack source has no world name");
+  return resolveWithin(
+    context.paths.data,
+    source.level_name,
+    "datapacks",
+    source.filename,
+  );
+}
+
+async function reconcileSource(
+  context: ResolveContext,
+  source: AddonSourceRow,
+): Promise<{
+  path: string;
+  enabled: boolean | null;
+  verified: boolean;
+} | null> {
+  let target = sourcePath(context, source);
+  let enabled: boolean | null = null;
+  if (source.target === "addons") {
+    enabled = true;
+    if (!(await pathExists(target))) {
+      const disabled = `${target}.disabled`;
+      if (await pathExists(disabled)) {
+        target = disabled;
+        enabled = false;
+      } else {
+        context.store.deleteAddonSource(source.server_id, source.filename);
+        return null;
+      }
+    }
+  } else if (!(await pathExists(target))) {
+    context.store.deleteAddonSource(source.server_id, source.filename);
+    return null;
+  }
+  const info = await stat(target);
+  if (!info.isFile()) {
+    context.store.deleteAddonSource(source.server_id, source.filename);
+    return null;
+  }
+  return {
+    path: target,
+    enabled,
+    verified:
+      (await sha512(target)).toLowerCase() === source.sha512.toLowerCase(),
+  };
+}
+
+export async function marketplaceInventory(
+  context: ResolveContext,
+  checkUpdates = false,
+): Promise<MarketplaceInventoryItem[]> {
+  const activeLevelName = await resolveLevelName(
+    context.paths.data,
+    context.serverConfig,
+  );
+  const items: MarketplaceInventoryItem[] = [];
+  for (const source of context.store.listAddonSources(context.serverId)) {
+    if (source.provider !== "modrinth") continue;
+    if (
+      source.target === "datapacks" &&
+      source.level_name !== activeLevelName
+    ) {
+      continue;
+    }
+    const reconciled = await reconcileSource(context, source);
+    if (!reconciled) continue;
+    let updateCandidate: MarketplaceUpdateCandidate | null = null;
+    if (reconciled.verified && checkUpdates) {
+      try {
+        const versions = await context.modrinth.listVersions({
+          idOrSlug: source.project_id,
+          serverType: context.serverConfig.type,
+          gameVersion: context.serverConfig.version,
+          projectType: source.project_type,
+        });
+        const best = pickBestVersion(
+          versions,
+          expectedExtension(source.target),
+        );
+        if (best && best.id !== source.version_id) {
+          const file = primaryFile(best);
+          updateCandidate = {
+            versionId: best.id,
+            versionNumber: best.versionNumber,
+            filename: file.filename,
+            sizeBytes: file.size,
+            versionType: best.versionType,
+            datePublished: best.datePublished,
+          };
+        }
+      } catch {
+        // Installed state remains authoritative if an upstream update check fails.
+      }
+    }
+    items.push({
+      provider: "modrinth",
+      target: source.target,
+      projectType: source.project_type,
+      projectId: source.project_id,
+      projectTitle: source.project_title,
+      versionId: source.version_id,
+      versionNumber: source.version_number,
+      filename: source.filename,
+      levelName: source.level_name,
+      enabled: reconciled.enabled,
+      installedAt: source.installed_at,
+      state: !reconciled.verified
+        ? "modified"
+        : updateCandidate
+          ? "update-available"
+          : source.target === "datapacks"
+            ? "downloaded"
+            : "installed",
+      updateCandidate,
+    });
+  }
+  return items;
 }
 
 export interface ResolveContext {
@@ -396,130 +550,298 @@ export async function runInstall(
   },
 ): Promise<string> {
   const { serverId } = context;
-  if (activeInstalls.has(serverId)) {
+  const resolved = await resolveInstall(context, input);
+  const items = [resolved.primary];
+  if (input.includeRequiredDependencies) {
+    items.push(
+      ...resolved.dependencies.filter((item) => !item.alreadyInstalled),
+    );
+  }
+
+  let levelName = "";
+  if (resolved.target === "datapacks") {
+    levelName = await resolveLevelName(
+      context.paths.data,
+      context.serverConfig,
+    );
+    if (
+      input.acknowledgeLevelName &&
+      input.acknowledgeLevelName !== levelName
+    ) {
+      throw httpError(
+        `This server now uses world "${levelName}". Review the install and try again.`,
+        409,
+      );
+    }
+  }
+
+  const staged: StagedDownload[] = [];
+  try {
+    for (const item of items) {
+      const temp = await createTempUpload(config.tempRoot);
+      const expected: ExpectedFile = {
+        url: item.file.url,
+        filename: item.file.filename,
+        sizeBytes: item.file.size,
+        sha512: item.file.sha512,
+        sha1: item.file.sha1,
+      };
+      await context.modrinth.downloadFile(expected, temp);
+      staged.push({ item, tempPath: temp.path });
+    }
+
+    const undo: Array<() => Promise<void>> = [];
+    const installedNames: string[] = [];
+    try {
+      for (const entry of staged) {
+        if (resolved.target === "datapacks") {
+          const result = await installDatapack(
+            entry.tempPath,
+            entry.item.file.filename,
+            context.paths.data,
+            levelName,
+          );
+          installedNames.push(result.filename);
+          const worldDir = path.join(context.paths.data, levelName);
+          const datapacksDir = path.join(worldDir, "datapacks");
+          const target = path.join(datapacksDir, result.filename);
+          undo.push(async () => {
+            await rm(target, { force: true });
+            // Installing into a world that did not exist creates two
+            // directories as a side effect; a rollback should not leave them
+            // behind, because their presence changes what a later preview
+            // reports. rmdir refuses a non-empty directory, which is exactly
+            // the guard wanted here.
+            if (result.worldCreated) {
+              await rmdir(datapacksDir).catch(() => undefined);
+              await rmdir(worldDir).catch(() => undefined);
+            }
+          });
+          context.store.recordAddonSource({
+            server_id: serverId,
+            filename: result.filename,
+            provider: "modrinth",
+            target: "datapacks",
+            project_type: "datapack",
+            level_name: levelName,
+            project_id: entry.item.version.projectId,
+            project_title: entry.item.projectTitle,
+            version_id: entry.item.version.id,
+            version_number: entry.item.version.versionNumber,
+            sha512: entry.item.file.sha512,
+            installed_at: new Date().toISOString(),
+          });
+        } else {
+          const filename = await installJar(
+            entry.tempPath,
+            entry.item.file.filename,
+            context.paths.addons,
+          );
+          installedNames.push(filename);
+          undo.push(() =>
+            removeAddon(context.paths.addons, filename).catch(() => undefined),
+          );
+          context.store.recordAddonSource({
+            server_id: serverId,
+            filename,
+            provider: "modrinth",
+            target: "addons",
+            project_type: input.projectType,
+            level_name: null,
+            project_id: entry.item.version.projectId,
+            project_title: entry.item.projectTitle,
+            version_id: entry.item.version.id,
+            version_number: entry.item.version.versionNumber,
+            sha512: entry.item.file.sha512,
+            installed_at: new Date().toISOString(),
+          });
+        }
+      }
+    } catch (error) {
+      await Promise.all(undo.map((step) => step().catch(() => undefined)));
+      for (const filename of installedNames) {
+        context.store.deleteAddonSource(serverId, filename);
+      }
+      throw error;
+    }
+
+    context.store.touchServerRevision(serverId);
+    const summary =
+      installedNames.length === 1
+        ? `Installed ${installedNames[0]}`
+        : `Installed ${installedNames.length} files: ${installedNames.join(", ")}`;
+    return resolved.target === "datapacks"
+      ? `${summary} into world "${levelName}"`
+      : summary;
+  } finally {
+    await Promise.all(
+      staged.map((entry) =>
+        rm(entry.tempPath, { force: true }).catch(() => undefined),
+      ),
+    );
+  }
+}
+
+export async function buildUpdatePreview(
+  context: ResolveContext,
+  input: ModrinthUpdateInput,
+): Promise<ModrinthUpdatePreview> {
+  const target = assertInstallable(context.serverConfig, input.projectType);
+  if (target !== "addons" && target !== "datapacks") {
+    throw httpError("This project cannot be updated on the server", 400);
+  }
+  const levelName =
+    target === "datapacks"
+      ? await resolveLevelName(context.paths.data, context.serverConfig)
+      : null;
+  const source = context.store.getAddonSource(
+    context.serverId,
+    "modrinth",
+    target,
+    input.projectId,
+    levelName,
+  );
+  if (!source || source.version_id !== input.currentVersionId) {
     throw httpError(
-      "An add-on install is already running for this server",
+      "The installed version changed. Refresh and review again.",
       409,
     );
   }
-  activeInstalls.add(serverId);
+  const reconciled = await reconcileSource(context, source);
+  if (!reconciled || !reconciled.verified) {
+    throw httpError(
+      "The installed file was changed. Review it before updating.",
+      409,
+    );
+  }
+  const resolved = await resolveInstall(context, input);
+  if (resolved.primary.version.projectId !== source.project_id) {
+    throw httpError("The update does not belong to the installed project", 400);
+  }
+  const preview = await buildPreview(context, input);
+  const candidate: MarketplaceUpdateCandidate = {
+    versionId: resolved.primary.version.id,
+    versionNumber: resolved.primary.version.versionNumber,
+    filename: resolved.primary.file.filename,
+    sizeBytes: resolved.primary.file.size,
+    versionType: resolved.primary.version.versionType,
+    datePublished: resolved.primary.version.datePublished,
+  };
+  return {
+    ...preview,
+    current: {
+      projectId: source.project_id,
+      versionId: source.version_id,
+      versionNumber: source.version_number,
+      filename: source.filename,
+    },
+    candidate,
+    filenameChanges: source.filename !== candidate.filename,
+  };
+}
+
+export async function runUpdate(
+  context: ResolveContext,
+  input: ModrinthUpdateInput,
+): Promise<string> {
+  const preview = await buildUpdatePreview(context, input);
+  const target = preview.target as "addons" | "datapacks";
+  const levelName = preview.levelName;
+  const source = context.store.getAddonSource(
+    context.serverId,
+    "modrinth",
+    target,
+    input.projectId,
+    levelName,
+  );
+  if (!source) throw httpError("The installed project changed", 409);
+  const current = await reconcileSource(context, source);
+  if (!current || !current.verified) {
+    throw httpError(
+      "The installed file was changed. Review it before updating.",
+      409,
+    );
+  }
+  const version = await context.modrinth.getVersion(input.versionId);
+  if (version.projectId !== source.project_id) {
+    throw httpError("The update does not belong to the installed project", 400);
+  }
+  const file = primaryFile(version);
+  const temp = await createTempUpload(config.tempRoot);
+  const backup = `${current.path}.update-backup-${crypto.randomUUID()}`;
+  const directory = path.dirname(current.path);
+  const destinationBase = path.join(directory, file.filename);
+  const destination =
+    source.target === "addons" && current.enabled === false
+      ? `${destinationBase}.disabled`
+      : destinationBase;
+  let backedUp = false;
+  let replacementInstalled = false;
   try {
-    const resolved = await resolveInstall(context, input);
-    const items = [resolved.primary];
-    if (input.includeRequiredDependencies) {
-      items.push(
-        ...resolved.dependencies.filter((item) => !item.alreadyInstalled),
+    await context.modrinth.downloadFile(
+      {
+        url: file.url,
+        filename: file.filename,
+        sizeBytes: file.size,
+        sha512: file.sha512,
+        sha1: file.sha1,
+      },
+      temp,
+    );
+    const latest = context.store.getAddonSource(
+      context.serverId,
+      "modrinth",
+      target,
+      input.projectId,
+      levelName,
+    );
+    if (!latest || latest.version_id !== input.currentVersionId) {
+      throw httpError(
+        "The installed version changed. Refresh and review again.",
+        409,
       );
     }
-
-    let levelName = "";
-    if (resolved.target === "datapacks") {
-      levelName = await resolveLevelName(
-        context.paths.data,
-        context.serverConfig,
-      );
-      if (
-        input.acknowledgeLevelName &&
-        input.acknowledgeLevelName !== levelName
-      ) {
-        throw httpError(
-          `This server now uses world "${levelName}". Review the install and try again.`,
-          409,
-        );
-      }
+    const checked = await reconcileSource(context, latest);
+    if (!checked || !checked.verified || checked.path !== current.path) {
+      throw httpError("The installed file changed during the update", 409);
     }
-
-    const staged: StagedDownload[] = [];
-    try {
-      for (const item of items) {
-        const temp = await createTempUpload(config.tempRoot);
-        const expected: ExpectedFile = {
-          url: item.file.url,
-          filename: item.file.filename,
-          sizeBytes: item.file.size,
-          sha512: item.file.sha512,
-          sha1: item.file.sha1,
-        };
-        await context.modrinth.downloadFile(expected, temp);
-        staged.push({ item, tempPath: temp.path });
-      }
-
-      const undo: Array<() => Promise<void>> = [];
-      const installedNames: string[] = [];
-      try {
-        for (const entry of staged) {
-          if (resolved.target === "datapacks") {
-            const result = await installDatapack(
-              entry.tempPath,
-              entry.item.file.filename,
-              context.paths.data,
-              levelName,
-            );
-            installedNames.push(result.filename);
-            const worldDir = path.join(context.paths.data, levelName);
-            const datapacksDir = path.join(worldDir, "datapacks");
-            const target = path.join(datapacksDir, result.filename);
-            undo.push(async () => {
-              await rm(target, { force: true });
-              // Installing into a world that did not exist creates two
-              // directories as a side effect; a rollback should not leave them
-              // behind, because their presence changes what a later preview
-              // reports. rmdir refuses a non-empty directory, which is exactly
-              // the guard wanted here.
-              if (result.worldCreated) {
-                await rmdir(datapacksDir).catch(() => undefined);
-                await rmdir(worldDir).catch(() => undefined);
-              }
-            });
-          } else {
-            const filename = await installJar(
-              entry.tempPath,
-              entry.item.file.filename,
-              context.paths.addons,
-            );
-            installedNames.push(filename);
-            undo.push(() =>
-              removeAddon(context.paths.addons, filename).catch(
-                () => undefined,
-              ),
-            );
-            context.store.recordAddonSource({
-              server_id: serverId,
-              filename,
-              provider: "modrinth",
-              project_id: entry.item.version.projectId,
-              project_title: entry.item.projectTitle,
-              version_id: entry.item.version.id,
-              version_number: entry.item.version.versionNumber,
-              sha512: entry.item.file.sha512,
-              installed_at: new Date().toISOString(),
-            });
-          }
-        }
-      } catch (error) {
-        await Promise.all(undo.map((step) => step().catch(() => undefined)));
-        for (const filename of installedNames) {
-          context.store.deleteAddonSource(serverId, filename);
-        }
-        throw error;
-      }
-
-      context.store.touchServerRevision(serverId);
-      const summary =
-        installedNames.length === 1
-          ? `Installed ${installedNames[0]}`
-          : `Installed ${installedNames.length} files: ${installedNames.join(", ")}`;
-      return resolved.target === "datapacks"
-        ? `${summary} into world "${levelName}"`
-        : summary;
-    } finally {
-      await Promise.all(
-        staged.map((entry) =>
-          rm(entry.tempPath, { force: true }).catch(() => undefined),
-        ),
-      );
+    const destinationName = path.basename(destination);
+    const collision = await caseInsensitiveEntry(directory, destinationName);
+    if (
+      collision &&
+      path.join(directory, collision).toLowerCase() !==
+        current.path.toLowerCase()
+    ) {
+      throw httpError(`A file named ${destinationName} already exists`, 409);
     }
+    await mkdir(directory, { recursive: true });
+    await rename(current.path, backup);
+    backedUp = true;
+    await rename(temp.path, destination);
+    replacementInstalled = true;
+    await chmod(destination, 0o644);
+    context.store.updateAddonSource(source, {
+      ...source,
+      filename: file.filename,
+      version_id: version.id,
+      version_number: version.versionNumber,
+      sha512: file.sha512,
+      installed_at: new Date().toISOString(),
+    });
+    await rm(backup, { force: true });
+    context.store.touchServerRevision(context.serverId);
+    return `Updated ${source.project_title} to ${version.versionNumber}`;
+  } catch (error) {
+    if (replacementInstalled) await rm(destination, { force: true });
+    if (backedUp && (await pathExists(backup))) {
+      await rename(backup, current.path);
+    }
+    if (source) context.store.recordAddonSource(source);
+    throw error;
   } finally {
-    activeInstalls.delete(serverId);
+    await Promise.all([
+      rm(temp.path, { force: true }),
+      rm(backup, { force: true }),
+    ]);
   }
 }

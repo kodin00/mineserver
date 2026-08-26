@@ -1,6 +1,15 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { ServerConfigSchema } from "@mineserver/shared";
@@ -65,13 +74,9 @@ async function fixture(
     csrfToken,
     new Date(Date.now() + 60_000).toISOString(),
   );
-  const app = await buildApp({
-    store,
-    docker,
-    jobs: new JobRunner(store),
-    modrinth,
-  });
-  return { app, store, serverId, sessionToken, csrfToken };
+  const jobs = new JobRunner(store);
+  const app = await buildApp({ store, docker, jobs, modrinth });
+  return { app, store, jobs, serverId, sessionToken, csrfToken };
 }
 
 describe("server lifecycle actions", () => {
@@ -137,6 +142,310 @@ describe("server lifecycle actions", () => {
   });
 });
 
+describe("server mutation coordination", () => {
+  it("rejects synchronous and async routes while another change owns the server", async () => {
+    const docker = {
+      status: async () => ({ state: "stopped" as const, exists: true }),
+      startExisting: async () => undefined,
+    } as unknown as ComposeManager;
+    const { app, store, jobs, serverId, sessionToken, csrfToken } =
+      await fixture(docker);
+    const headers = {
+      cookie: `ms_session=${sessionToken}`,
+      "x-csrf-token": csrfToken,
+    };
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = jobs.mutations.runExclusive(
+      serverId,
+      "test-change",
+      () => blocked,
+    );
+
+    const fileCreate = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/files`,
+      headers,
+      payload: { parentPath: "", name: "blocked.txt", type: "file" },
+    });
+    expect(fileCreate.statusCode).toBe(409);
+    expect(fileCreate.json<{ error: string }>().error).toContain("test-change");
+
+    const lifecycle = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/actions/start`,
+      headers,
+    });
+    expect(lifecycle.statusCode).toBe(409);
+    expect(store.listOperations(serverId)).toHaveLength(0);
+
+    release();
+    await first;
+    const allowed = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/files`,
+      headers,
+      payload: { parentPath: "", name: "allowed.txt", type: "file" },
+    });
+    expect(allowed.statusCode).toBe(201);
+
+    await app.close();
+    store.db.close();
+  });
+});
+
+describe("world routes", () => {
+  it("returns active world information and requires a stopped server for import", async () => {
+    const docker = {
+      status: async () => ({ state: "running" as const, exists: true }),
+    } as unknown as ComposeManager;
+    const { app, store, serverId, sessionToken, csrfToken } =
+      await fixture(docker);
+    const world = instancePaths(config.instancesRoot, serverId).data;
+    await mkdir(path.join(world, "world"), { recursive: true });
+    await writeFile(path.join(world, "world", "level.dat"), "level");
+
+    const info = await app.inject({
+      method: "GET",
+      url: `/api/servers/${serverId}/world`,
+      headers: { cookie: `ms_session=${sessionToken}` },
+    });
+    expect(info.statusCode).toBe(200);
+    expect(info.json()).toMatchObject({
+      levelName: "world",
+      exists: true,
+      serverState: "running",
+      canImport: false,
+    });
+
+    const body = multipart([{ name: "world.zip", contents: "not-used" }]);
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/world/import`,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "x-csrf-token": csrfToken,
+        "content-type": body.contentType,
+      },
+      payload: body.payload,
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json<{ error: string }>().error).toContain(
+      "Stop the server",
+    );
+
+    await app.close();
+    store.db.close();
+  });
+
+  it("blocks file mutations while a world mutation lease is active", async () => {
+    const docker = {
+      status: async () => ({ state: "stopped" as const, exists: true }),
+    } as unknown as ComposeManager;
+    const root = await mkdtemp(path.join(tmpdir(), "mineserver-world-lock-"));
+    roots.push(root);
+    config.instancesRoot = path.join(root, "instances");
+    config.tempRoot = path.join(root, "temp");
+    const store = new Store(path.join(root, "panel.sqlite"));
+    const serverId = "server-1";
+    store.insertServer(
+      serverId,
+      "test-server",
+      ServerConfigSchema.parse({ name: "Test server", type: "FABRIC" }),
+    );
+    const sessionToken = "test-session";
+    const csrfToken = "test-csrf";
+    store.createSession(
+      sha256(sessionToken),
+      csrfToken,
+      new Date(Date.now() + 60_000).toISOString(),
+    );
+    const jobs = new JobRunner(store);
+    const app = await buildApp({
+      store,
+      docker,
+      jobs,
+      modrinth: {} as ModrinthApi,
+    });
+    const lease = jobs.mutations.acquire(serverId, "world-import");
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/servers/${serverId}/files`,
+        headers: {
+          cookie: `ms_session=${sessionToken}`,
+          "x-csrf-token": csrfToken,
+        },
+        payload: { parentPath: "", name: "racing.txt", type: "file" },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json<{ error: string }>().error).toContain(
+        "world-import",
+      );
+    } finally {
+      lease.release();
+    }
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/files`,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "x-csrf-token": csrfToken,
+      },
+      payload: { parentPath: "", name: "after.txt", type: "file" },
+    });
+    expect(created.statusCode).toBe(201);
+
+    await app.close();
+    store.db.close();
+  });
+
+  it("requires authentication and CSRF protection for world import", async () => {
+    const docker = {
+      status: async () => ({ state: "stopped" as const, exists: true }),
+    } as unknown as ComposeManager;
+    const { app, store, serverId, sessionToken } = await fixture(docker);
+    const body = multipart([{ name: "world.zip", contents: "not a zip" }]);
+    const unauthenticated = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/world/import`,
+      headers: { "content-type": body.contentType },
+      payload: body.payload,
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+    const noCsrf = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/world/import`,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "content-type": body.contentType,
+      },
+      payload: body.payload,
+    });
+    expect(noCsrf.statusCode).toBe(403);
+
+    await app.close();
+    store.db.close();
+  });
+});
+
+describe("player routes", () => {
+  it("returns structured players and runs validated player actions", async () => {
+    const commands: string[] = [];
+    const docker = {
+      console: async (_id: string, _paths: unknown, command: string) => {
+        commands.push(command);
+        return {
+          stdout:
+            command === "list"
+              ? "There are 1 of a max of 20 players online: Steve"
+              : "Kicked Steve: Please reconnect",
+          stderr: "",
+          code: 0,
+        };
+      },
+    } as unknown as ComposeManager;
+    const { app, store, serverId, sessionToken, csrfToken } =
+      await fixture(docker);
+    const cookie = `ms_session=${sessionToken}`;
+
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/servers/${serverId}/players`,
+      headers: { cookie },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      online: 1,
+      max: 20,
+      players: [{ name: "Steve" }],
+    });
+
+    const action = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/players/actions`,
+      headers: {
+        cookie,
+        "x-csrf-token": csrfToken,
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "kick",
+        player: "Steve",
+        reason: "Please reconnect",
+      },
+    });
+    expect(action.statusCode).toBe(200);
+    expect(action.json()).toMatchObject({
+      ok: true,
+      output: "Kicked Steve: Please reconnect",
+    });
+    expect(commands).toEqual(["list", "kick Steve Please reconnect", "list"]);
+
+    await app.close();
+    store.db.close();
+  });
+
+  it("rejects injection, enforces CSRF, and normalizes unavailable RCON", async () => {
+    const docker = {
+      console: async () => {
+        throw new Error("RCON connection refused");
+      },
+    } as unknown as ComposeManager;
+    const { app, store, serverId, sessionToken, csrfToken } =
+      await fixture(docker);
+    const cookie = `ms_session=${sessionToken}`;
+
+    const noCsrf = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/players/actions`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: { action: "op", player: "Steve" },
+    });
+    expect(noCsrf.statusCode).toBe(403);
+
+    const injection = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/players/actions`,
+      headers: {
+        cookie,
+        "x-csrf-token": csrfToken,
+        "content-type": "application/json",
+      },
+      payload: { action: "ban", player: "Steve", reason: "bad\nwhitelist off" },
+    });
+    expect(injection.statusCode).toBe(400);
+
+    const unavailable = await app.inject({
+      method: "GET",
+      url: `/api/servers/${serverId}/players`,
+      headers: { cookie },
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json<{ error: string }>().error).toMatch(
+      /unavailable.*not ready/i,
+    );
+
+    const whitelist = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/whitelist/actions`,
+      headers: {
+        cookie,
+        "x-csrf-token": csrfToken,
+        "content-type": "application/json",
+      },
+      payload: { action: "disable" },
+    });
+    expect(whitelist.statusCode).toBe(400);
+
+    await app.close();
+    store.db.close();
+  });
+});
+
 describe("Docker logs", () => {
   it("returns retained logs and clamps oversized tail requests", async () => {
     let requestedTail: number | undefined;
@@ -177,6 +486,159 @@ afterEach(async () => {
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
+});
+
+describe("server file manager routes", () => {
+  it("requires authentication and CSRF protection for file mutations", async () => {
+    const { app, store, serverId, sessionToken } = await fixture();
+    const unauthenticated = await app.inject({
+      method: "GET",
+      url: `/api/servers/${serverId}/files`,
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const missingCsrf = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/files`,
+      headers: { cookie: `ms_session=${sessionToken}` },
+      payload: { parentPath: "", name: "notes.txt", type: "file" },
+    });
+    expect(missingCsrf.statusCode).toBe(403);
+
+    await app.close();
+    store.db.close();
+  });
+
+  it("creates, uploads, downloads, moves, and recursively deletes files", async () => {
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture();
+    const headers = {
+      cookie: `ms_session=${sessionToken}`,
+      "x-csrf-token": csrfToken,
+    };
+    const data = instancePaths(config.instancesRoot, serverId).data;
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/files`,
+      headers,
+      payload: { parentPath: "", name: "imports", type: "directory" },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      path: "imports",
+      type: "directory",
+    });
+
+    const upload = multipart([
+      { name: "alpha.bin", contents: "binary contents" },
+      { name: "notes.txt", contents: "hello world" },
+    ]);
+    const uploaded = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/files/upload?path=imports`,
+      headers: { ...headers, "content-type": upload.contentType },
+      payload: upload.payload,
+    });
+    expect(uploaded.statusCode).toBe(201);
+    expect(
+      uploaded
+        .json<{ files: Array<{ path: string }> }>()
+        .files.map((file) => file.path),
+    ).toEqual(["imports/alpha.bin", "imports/notes.txt"]);
+
+    const downloaded = await app.inject({
+      method: "GET",
+      url: `/api/servers/${serverId}/files/download?path=imports%2Falpha.bin`,
+      headers: { cookie: `ms_session=${sessionToken}` },
+    });
+    expect(downloaded.statusCode).toBe(200);
+    expect(downloaded.rawPayload.toString()).toBe("binary contents");
+    expect(downloaded.headers["content-type"]).toBe("application/octet-stream");
+    expect(downloaded.headers["content-disposition"]).toContain("alpha.bin");
+    expect(downloaded.headers["x-content-type-options"]).toBe("nosniff");
+
+    const moved = await app.inject({
+      method: "PATCH",
+      url: `/api/servers/${serverId}/files`,
+      headers,
+      payload: {
+        path: "imports/notes.txt",
+        destinationPath: "imports/readme.txt",
+      },
+    });
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json()).toMatchObject({ path: "imports/readme.txt" });
+    expect(
+      await readFile(path.join(data, "imports", "readme.txt"), "utf8"),
+    ).toBe("hello world");
+
+    const directory = await stat(path.join(data, "imports"));
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/api/servers/${serverId}/files?path=imports&expectedModifiedAt=${encodeURIComponent(directory.mtime.toISOString())}`,
+      headers,
+    });
+    expect(deleted.statusCode).toBe(204);
+    await expect(stat(path.join(data, "imports"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    await app.close();
+    store.db.close();
+  });
+
+  it("rejects collisions, root mutations, traversal, and symlink escapes", async () => {
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture();
+    const headers = {
+      cookie: `ms_session=${sessionToken}`,
+      "x-csrf-token": csrfToken,
+    };
+    const data = instancePaths(config.instancesRoot, serverId).data;
+    await mkdir(data, { recursive: true });
+    await writeFile(path.join(data, "existing.txt"), "original");
+    const outside = await mkdtemp(
+      path.join(tmpdir(), "mineserver-files-route-outside-"),
+    );
+    roots.push(outside);
+    await symlink(outside, path.join(data, "outside"), "dir");
+
+    const collision = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/files`,
+      headers,
+      payload: { parentPath: "", name: "existing.txt", type: "file" },
+    });
+    expect(collision.statusCode).toBe(409);
+
+    const rootDelete = await app.inject({
+      method: "DELETE",
+      url: `/api/servers/${serverId}/files?path=`,
+      headers,
+    });
+    expect(rootDelete.statusCode).toBe(400);
+
+    const traversal = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/files`,
+      headers,
+      payload: { parentPath: "../", name: "escape.txt", type: "file" },
+    });
+    expect(traversal.statusCode).toBe(400);
+
+    const symlinkEscape = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/files`,
+      headers,
+      payload: { parentPath: "outside", name: "escape.txt", type: "file" },
+    });
+    expect(symlinkEscape.statusCode).toBe(400);
+    await expect(stat(path.join(outside, "escape.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    await app.close();
+    store.db.close();
+  });
 });
 
 describe("one-time public add-on downloads", () => {

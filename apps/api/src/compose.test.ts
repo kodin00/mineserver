@@ -40,6 +40,17 @@ describe("compose generation", () => {
     expect(environment.OVERRIDE_ICON).toBe("TRUE");
   });
 
+  it("does not overwrite live whitelist or operator membership", () => {
+    const environment = environmentFor({
+      ...base,
+      whitelist: ["Steve"],
+      operators: ["Alex"],
+    });
+    expect(environment.ENABLE_WHITELIST).toBeUndefined();
+    expect(environment.WHITELIST).toBeUndefined();
+    expect(environment.OPS).toBeUndefined();
+  });
+
   it("retries a failed container only once", () => {
     const paths = instancePaths("/opt/mineserver/instances", "abc");
     const document = YAML.parse(renderCompose("abc", base, paths));
@@ -74,7 +85,7 @@ describe("compose generation", () => {
     );
   });
 
-  it("carries whitelist and Forge handshake rules into the wake proxy", () => {
+  it("keeps live whitelist state out of the Forge wake proxy", () => {
     const paths = instancePaths("/opt/mineserver/instances", "abc");
     const document = YAML.parse(
       renderCompose(
@@ -90,7 +101,7 @@ describe("compose generation", () => {
     );
     expect(document.services.mc.labels["lazymc.server.forge"]).toBe("true");
     expect(document.services.mc.labels["lazymc.server.wake_whitelist"]).toBe(
-      "true",
+      "false",
     );
     expect(document.services.mc.labels["lazymc.server.block_banned_ips"]).toBe(
       "true",

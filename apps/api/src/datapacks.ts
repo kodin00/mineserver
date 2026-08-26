@@ -4,6 +4,7 @@ import {
   chown,
   mkdir,
   readFile,
+  readdir,
   rename,
   rm,
   stat,
@@ -168,8 +169,12 @@ export async function installDatapack(
   const directory = datapacksDirectory(dataDir, levelName);
   await mkdir(directory, { recursive: true });
 
+  const existing = await readdir(directory, { withFileTypes: true });
+  const collision = existing.some(
+    (entry) => entry.name.toLowerCase() === filename.toLowerCase(),
+  );
   const target = path.join(directory, filename);
-  if (await pathExists(target)) {
+  if (collision) {
     throw new Error(`A datapack named ${filename} already exists`);
   }
   await rename(tempPath, target);

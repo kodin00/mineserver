@@ -199,7 +199,9 @@ export function OverviewTab({
           <div>
             <small>Players</small>
             <strong>
-              {stats?.players?.match(/There are (\d+)/)?.[1] ?? "—"}
+              {stats?.players
+                ? `${stats.players.online}/${stats.players.max}`
+                : "—"}
             </strong>
           </div>
         </div>

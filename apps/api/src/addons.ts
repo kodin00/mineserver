@@ -52,6 +52,17 @@ export async function listAddons(directory: string): Promise<AddonFile[]> {
   ).then((files) => files.sort((a, b) => a.name.localeCompare(b.name)));
 }
 
+async function addonNameExists(directory: string, filename: string) {
+  const key = filename.toLowerCase();
+  const entries = await readdir(directory, { withFileTypes: true });
+  return entries.some(
+    (entry) =>
+      entry.isFile() &&
+      (entry.name.toLowerCase() === key ||
+        entry.name.toLowerCase() === `${key}.disabled`),
+  );
+}
+
 export async function installJar(
   tempPath: string,
   originalName: string,
@@ -62,7 +73,7 @@ export async function installJar(
     throw new Error("Only .jar files are accepted");
   await mkdir(directory, { recursive: true });
   const target = path.join(directory, filename);
-  if ((await pathExists(target)) || (await pathExists(`${target}.disabled`))) {
+  if (await addonNameExists(directory, filename)) {
     throw new Error(`An add-on named ${filename} already exists`);
   }
   await rename(tempPath, target);
@@ -176,10 +187,7 @@ export async function installZip(
           ) {
             throw new Error(`ZIP contains duplicate filename: ${leaf}`);
           }
-          if (
-            (await pathExists(path.join(directory, leaf))) ||
-            (await pathExists(path.join(directory, `${leaf}.disabled`)))
-          ) {
+          if (await addonNameExists(directory, leaf)) {
             throw new Error(`An add-on named ${leaf} already exists`);
           }
           const stream = await entryStream(zip, entry);

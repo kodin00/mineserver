@@ -140,6 +140,130 @@ export const ConsoleCommandSchema = z.object({
     .refine((value) => !value.includes("\0")),
 });
 
+export const PlayerNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(16)
+  .regex(/^[A-Za-z0-9_]+$/, "Use a valid Minecraft player name");
+
+export const PlayerReasonSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(300)
+  .refine(
+    (value) => !/[\0-\x1f\x7f]/.test(value),
+    "Reasons cannot contain control characters",
+  );
+
+export const PlayerActionSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("kick"),
+    player: PlayerNameSchema,
+    reason: PlayerReasonSchema.optional(),
+  }),
+  z.object({
+    action: z.literal("ban"),
+    player: PlayerNameSchema,
+    reason: PlayerReasonSchema.optional(),
+  }),
+  z.object({ action: z.literal("pardon"), player: PlayerNameSchema }),
+  z.object({ action: z.literal("whitelist-add"), player: PlayerNameSchema }),
+  z.object({ action: z.literal("whitelist-remove"), player: PlayerNameSchema }),
+  z.object({ action: z.literal("op"), player: PlayerNameSchema }),
+  z.object({ action: z.literal("deop"), player: PlayerNameSchema }),
+]);
+export type PlayerAction = z.infer<typeof PlayerActionSchema>;
+
+export const WhitelistActionSchema = z.object({
+  action: z.enum(["on", "off", "reload"]),
+});
+export type WhitelistAction = z.infer<typeof WhitelistActionSchema>;
+
+export interface OnlinePlayers {
+  online: number;
+  max: number;
+  players: Array<{ name: string }>;
+  fetchedAt: string;
+}
+
+export interface PlayerActionResult {
+  ok: true;
+  output: string;
+  players: OnlinePlayers | null;
+}
+
+const relativeServerPathSchema = z
+  .string()
+  .min(0)
+  .max(4096)
+  .refine((value) => !value.includes("\0"), "Invalid file path")
+  .refine((value) => !value.startsWith("/"), "Use a relative file path")
+  .refine(
+    (value) => !value.replace(/\\/g, "/").split("/").includes(".."),
+    "Invalid file path",
+  );
+
+const serverFileNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .refine(
+    (value) =>
+      value !== "." &&
+      value !== ".." &&
+      !value.includes("/") &&
+      !value.includes("\\") &&
+      !/[\0-\x1f\x7f]/.test(value),
+    "Invalid file name",
+  );
+
+export const ServerFileCreateSchema = z.object({
+  parentPath: relativeServerPathSchema.default(""),
+  name: serverFileNameSchema,
+  type: z.enum(["file", "directory"]),
+});
+export type ServerFileCreateInput = z.infer<typeof ServerFileCreateSchema>;
+
+const nonemptyRelativeServerPathSchema = relativeServerPathSchema.refine(
+  (value) => value.length > 0,
+  "File path is required",
+);
+
+export const ServerFileMoveSchema = z
+  .object({
+    path: nonemptyRelativeServerPathSchema,
+    destinationPath: nonemptyRelativeServerPathSchema,
+  })
+  .refine((value) => value.path !== value.destinationPath, {
+    message: "Source and destination must differ",
+    path: ["destinationPath"],
+  });
+export type ServerFileMoveInput = z.infer<typeof ServerFileMoveSchema>;
+
+export const ServerFileDeleteSchema = z.object({
+  path: nonemptyRelativeServerPathSchema,
+  expectedModifiedAt: z.string().datetime().optional(),
+});
+export type ServerFileDeleteInput = z.infer<typeof ServerFileDeleteSchema>;
+
+export const WorldImportSchema = z.object({
+  acknowledgeLevelName: z.string().trim().min(1).max(64),
+  overwrite: z.literal(true),
+});
+export type WorldImportInput = z.infer<typeof WorldImportSchema>;
+
+export interface WorldInfo {
+  levelName: string;
+  exists: boolean;
+  size: number | null;
+  modifiedAt: string | null;
+  serverState: ServerState;
+  canImport: boolean;
+}
+
 export const serverStates = [
   "running",
   "stopped",
@@ -174,7 +298,7 @@ export interface ServerStats {
   cpuPercent: number | null;
   memoryUsage: string | null;
   memoryPercent: number | null;
-  players: string | null;
+  players: OnlinePlayers | null;
   uptime: string | null;
 }
 

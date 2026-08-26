@@ -11,6 +11,7 @@ import {
   modrinthProjectUrl,
   marketplaceTargetFor,
   supportedMarketplaceTypes,
+  type MarketplaceInventoryItem,
   type MarketplaceProjectType,
   type ModrinthSearchHit,
   type ModrinthSearchResult,
@@ -20,6 +21,7 @@ import {
   type ServerSummary,
 } from "@mineserver/shared";
 import { ApiError, api } from "../../api";
+import { Select, type ChoiceOption } from "../../components/ChoiceControls";
 import { EmptyState, ErrorBanner } from "../../components/Layout";
 import {
   buildSearchQuery,
@@ -75,6 +77,7 @@ export function BrowseTab({
   const [rateLimited, setRateLimited] = useState("");
   const [retried, setRetried] = useState(false);
   const [installedNames, setInstalledNames] = useState<Set<string>>(new Set());
+  const [inventory, setInventory] = useState<MarketplaceInventoryItem[]>([]);
   const [selected, setSelected] = useState<ModrinthSearchHit | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
   const [installed, setInstalled] = useState("");
@@ -93,14 +96,20 @@ export function BrowseTab({
 
   const loadInstalled = useCallback(async () => {
     try {
-      const url =
-        target === "datapacks"
-          ? `/api/servers/${server.id}/datapacks`
-          : `/api/servers/${server.id}/addons`;
-      const response = await api<{ files: Array<{ name: string }> }>(url);
+      const [response, provenance] = await Promise.all([
+        api<{ files: Array<{ name: string }> }>(
+          target === "datapacks"
+            ? `/api/servers/${server.id}/datapacks`
+            : `/api/servers/${server.id}/addons`,
+        ),
+        api<{ items: MarketplaceInventoryItem[] }>(
+          `/api/servers/${server.id}/marketplace/inventory?checkUpdates=true`,
+        ),
+      ]);
       setInstalledNames(
         new Set(response.files.map((file) => file.name.toLowerCase())),
       );
+      setInventory(provenance.items);
     } catch {
       // A missing installed list only weakens the duplicate warning.
     }
@@ -303,38 +312,40 @@ export function BrowseTab({
         <div className="addon-actions">
           <label>
             Sort
-            <select
+            <Select
               value={sort}
-              onChange={(event) =>
-                applyFilter(() =>
-                  setSort(event.target.value as ModrinthSortIndex),
-                )
+              options={
+                [
+                  { value: "relevance", label: "Relevance" },
+                  { value: "downloads", label: "Downloads" },
+                  { value: "follows", label: "Followers" },
+                  { value: "newest", label: "Newest" },
+                  { value: "updated", label: "Recently updated" },
+                ] satisfies ChoiceOption<ModrinthSortIndex>[]
               }
-            >
-              <option value="relevance">Relevance</option>
-              <option value="downloads">Downloads</option>
-              <option value="follows">Followers</option>
-              <option value="newest">Newest</option>
-              <option value="updated">Recently updated</option>
-            </select>
+              ariaLabel="Sort marketplace results"
+              onChange={(next) => applyFilter(() => setSort(next))}
+            />
           </label>
           <label>
             Minecraft
-            <select
+            <Select
               value={gameVersion}
-              onChange={(event) =>
-                applyFilter(() => setGameVersion(event.target.value))
-              }
-            >
-              <option value="">
-                {tracksMoving ? "Any" : `Server (${server.config.version})`}
-              </option>
-              {releaseVersions.slice(0, 40).map((version) => (
-                <option key={version} value={version}>
-                  {version}
-                </option>
-              ))}
-            </select>
+              options={[
+                {
+                  value: "",
+                  label: tracksMoving
+                    ? "Any"
+                    : `Server (${server.config.version})`,
+                },
+                ...releaseVersions.slice(0, 40).map((version) => ({
+                  value: version,
+                  label: version,
+                })),
+              ]}
+              ariaLabel="Minecraft version filter"
+              onChange={(next) => applyFilter(() => setGameVersion(next))}
+            />
           </label>
           {loading && <LoaderCircle className="spin" size={16} />}
         </div>
@@ -395,61 +406,89 @@ export function BrowseTab({
         </div>
       ) : (
         <div className="browse-grid" aria-busy={loading}>
-          {hits.map((hit) => (
-            <article className="browse-card" key={hit.projectId}>
-              <div className="browse-card-head">
-                <span className="browse-card-icon" aria-hidden="true">
-                  {hit.iconUrl ? (
-                    <img
-                      src={hit.iconUrl}
-                      alt=""
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <Package size={20} />
-                  )}
-                </span>
-                <div className="browse-card-body">
-                  <strong>{hit.title}</strong>
-                  <small className="muted">
-                    {hit.author ? `by ${hit.author}` : "Unknown author"}
-                  </small>
+          {hits.map((hit) => {
+            const local = inventory.find(
+              (item) =>
+                item.projectId === hit.projectId &&
+                item.projectType === projectType,
+            );
+            return (
+              <article className="browse-card" key={hit.projectId}>
+                <div className="browse-card-head">
+                  <span className="browse-card-icon" aria-hidden="true">
+                    {hit.iconUrl ? (
+                      <img
+                        src={hit.iconUrl}
+                        alt=""
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <Package size={20} />
+                    )}
+                  </span>
+                  <div className="browse-card-body">
+                    <strong>{hit.title}</strong>
+                    <small className="muted">
+                      {hit.author ? `by ${hit.author}` : "Unknown author"}
+                    </small>
+                  </div>
                 </div>
-              </div>
-              <p className="browse-card-description">{hit.description}</p>
-              <div className="browse-card-meta">
-                <span>{hit.downloads.toLocaleString()} downloads</span>
-                <span>
-                  <Heart size={12} /> {hit.follows.toLocaleString()}
-                </span>
-              </div>
-              <div className="browse-card-actions">
-                <a
-                  className="button ghost"
-                  href={modrinthProjectUrl(hit.slug)}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                >
-                  <ExternalLink size={15} /> Modrinth
-                </a>
-                {canInstall && (
-                  <button
-                    className="button primary"
-                    disabled={installBusy}
-                    title={
-                      installBusy
-                        ? "Another install is still running"
-                        : undefined
-                    }
-                    onClick={() => setSelected(hit)}
+                <p className="browse-card-description">{hit.description}</p>
+                <div className="browse-card-meta">
+                  <span>{hit.downloads.toLocaleString()} downloads</span>
+                  <span>
+                    <Heart size={12} /> {hit.follows.toLocaleString()}
+                  </span>
+                </div>
+                <div className="browse-card-actions">
+                  <a
+                    className="button ghost"
+                    href={modrinthProjectUrl(hit.slug)}
+                    target="_blank"
+                    rel="noreferrer noopener"
                   >
-                    Install
-                  </button>
-                )}
-              </div>
-            </article>
-          ))}
+                    <ExternalLink size={15} /> Modrinth
+                  </a>
+                  {canInstall &&
+                    local &&
+                    local.state !== "modified" &&
+                    (local.updateCandidate ? (
+                      <button
+                        className="button primary"
+                        disabled={installBusy}
+                        onClick={() => setSelected(hit)}
+                      >
+                        Update
+                      </button>
+                    ) : (
+                      <span className="enabled-pill">
+                        {local.state === "downloaded"
+                          ? "Downloaded"
+                          : "Installed"}
+                      </span>
+                    ))}
+                  {canInstall && local?.state === "modified" && (
+                    <span className="disabled-pill">Review file</span>
+                  )}
+                  {canInstall && !local && (
+                    <button
+                      className="button primary"
+                      disabled={installBusy}
+                      title={
+                        installBusy
+                          ? "Another install is still running"
+                          : undefined
+                      }
+                      onClick={() => setSelected(hit)}
+                    >
+                      Install
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
 
@@ -484,6 +523,15 @@ export function BrowseTab({
         projectType={projectType}
         gameVersion={effectiveVersion}
         installedNames={installedNames}
+        installedProject={
+          selected
+            ? (inventory.find(
+                (item) =>
+                  item.projectId === selected.projectId &&
+                  item.projectType === projectType,
+              ) ?? null)
+            : null
+        }
         onClose={() => setSelected(null)}
         onInstalled={(started) => {
           setSelected(null);

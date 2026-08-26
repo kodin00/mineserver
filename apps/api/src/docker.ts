@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ServerState, ServerStats } from "@mineserver/shared";
 import type { InstancePaths } from "./compose.js";
 import { config } from "./config.js";
+import { parseOnlinePlayers } from "./players.js";
 import { runCommand } from "./utils.js";
 
 export interface RuntimeStatus {
@@ -293,9 +294,11 @@ export class ComposeManager {
         { timeoutMs: 10_000 },
       );
       const value = JSON.parse(stats.stdout.trim());
-      let players: string | null = null;
+      let players: ServerStats["players"] = null;
       try {
-        players = (await this.console(id, paths, "list")).stdout.trim() || null;
+        players = parseOnlinePlayers(
+          (await this.console(id, paths, "list")).stdout,
+        );
       } catch {
         // The container can be running while RCON is still starting.
       }

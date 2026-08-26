@@ -7,6 +7,7 @@ import {
   serverTypes,
   type ServerConfig,
 } from "@mineserver/shared";
+import { Combobox, Select } from "./ChoiceControls";
 import { ErrorBanner } from "./Layout";
 
 export const defaultServerConfig: ServerConfig = ServerConfigSchema.parse({
@@ -110,34 +111,36 @@ export function ServerForm({
           </label>
           <label>
             Server type
-            <select
+            <Select
               value={value.type}
-              onChange={(event) =>
-                set("type", event.target.value as ServerConfig["type"])
-              }
-            >
-              {serverTypes.map((type) => (
-                <option key={type}>{type}</option>
-              ))}
-            </select>
+              options={serverTypes.map((type) => ({
+                value: type,
+                label: type,
+              }))}
+              ariaLabel="Server type"
+              onChange={(next) => set("type", next)}
+            />
           </label>
           <label>
             Minecraft version
-            <input
+            <Combobox
               value={value.version}
-              onChange={(event) => set("version", event.target.value)}
+              options={[
+                { value: "LATEST", label: "LATEST" },
+                { value: "SNAPSHOT", label: "SNAPSHOT" },
+                ...versionSuggestions.map((version) => ({
+                  value: version,
+                  label: version,
+                })),
+              ].filter(
+                (option, index, all) =>
+                  all.findIndex((entry) => entry.value === option.value) ===
+                  index,
+              )}
+              ariaLabel="Minecraft version"
+              onChange={(next) => set("version", next)}
               placeholder="LATEST or 1.21.5"
-              list="minecraft-version-suggestions"
             />
-            {versionSuggestions.length > 0 && (
-              <datalist id="minecraft-version-suggestions">
-                <option value="LATEST" />
-                <option value="SNAPSHOT" />
-                {versionSuggestions.map((version) => (
-                  <option value={version} key={version} />
-                ))}
-              </datalist>
-            )}
           </label>
           <label>
             Host port
@@ -293,32 +296,27 @@ export function ServerForm({
           </label>
           <label>
             Game mode
-            <select
+            <Select
               value={value.gameMode}
-              onChange={(event) =>
-                set("gameMode", event.target.value as ServerConfig["gameMode"])
-              }
-            >
-              {gameModes.map((mode) => (
-                <option key={mode}>{mode}</option>
-              ))}
-            </select>
+              options={gameModes.map((mode) => ({
+                value: mode,
+                label: mode,
+              }))}
+              ariaLabel="Game mode"
+              onChange={(next) => set("gameMode", next)}
+            />
           </label>
           <label>
             Difficulty
-            <select
+            <Select
               value={value.difficulty}
-              onChange={(event) =>
-                set(
-                  "difficulty",
-                  event.target.value as ServerConfig["difficulty"],
-                )
-              }
-            >
-              {difficulties.map((difficulty) => (
-                <option key={difficulty}>{difficulty}</option>
-              ))}
-            </select>
+              options={difficulties.map((difficulty) => ({
+                value: difficulty,
+                label: difficulty,
+              }))}
+              ariaLabel="Difficulty"
+              onChange={(next) => set("difficulty", next)}
+            />
           </label>
           <label className="span-2">
             World seed
@@ -326,38 +324,6 @@ export function ServerForm({
               value={value.seed}
               onChange={(event) => set("seed", event.target.value)}
               placeholder="Random"
-            />
-          </label>
-          <label className="span-2">
-            Whitelist players
-            <input
-              value={value.whitelist.join(", ")}
-              onChange={(event) =>
-                set(
-                  "whitelist",
-                  event.target.value
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean),
-                )
-              }
-              placeholder="Steve, Alex"
-            />
-          </label>
-          <label className="span-2">
-            Operators
-            <input
-              value={value.operators.join(", ")}
-              onChange={(event) =>
-                set(
-                  "operators",
-                  event.target.value
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean),
-                )
-              }
-              placeholder="AdminName"
             />
           </label>
           <div className="toggle-grid span-2">

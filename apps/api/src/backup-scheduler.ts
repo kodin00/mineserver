@@ -65,9 +65,13 @@ export class BackupScheduler {
         if (await pathExists(paths.backupMigrationMarker)) continue;
         const runtime = await this.docker.status(row.id, paths);
         if (runtime.state !== "running") continue;
-        this.jobs.run(row.id, "scheduled-backup", () =>
-          createBackup(row.id, paths, this.docker, serverConfig.backups),
-        );
+        try {
+          this.jobs.runExclusive(row.id, "scheduled-backup", () =>
+            createBackup(row.id, paths, this.docker, serverConfig.backups),
+          );
+        } catch (error: any) {
+          if (error?.statusCode !== 409) throw error;
+        }
       }
     } finally {
       this.checking = false;

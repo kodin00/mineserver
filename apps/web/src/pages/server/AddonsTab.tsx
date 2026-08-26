@@ -21,7 +21,12 @@ import {
 } from "lucide-react";
 import type { AddonFile, ServerSummary } from "@mineserver/shared";
 import { api, formatBytes, jsonBody } from "../../api";
-import { EmptyState, ErrorBanner } from "../../components/Layout";
+import { Select } from "../../components/ChoiceControls";
+import {
+  ConfirmationDialog,
+  EmptyState,
+  ErrorBanner,
+} from "../../components/Layout";
 
 export function AddonsTab({ server }: { server: ServerSummary }) {
   const [kind, setKind] = useState<"mods" | "plugins" | null>(null);
@@ -37,6 +42,7 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
   } | null>(null);
   const [copied, setCopied] = useState(false);
   const [sort, setSort] = useState<"alphabetical" | "newest">("alphabetical");
+  const [pendingDelete, setPendingDelete] = useState<AddonFile | null>(null);
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const uploadInFlight = useRef(false);
@@ -152,12 +158,6 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
   }
 
   async function remove(file: AddonFile) {
-    if (
-      !confirm(
-        `Delete ${file.name}? The server must be restarted for this to take effect.`,
-      )
-    )
-      return;
     try {
       await api(
         `/api/servers/${server.id}/addons/${encodeURIComponent(file.name)}`,
@@ -165,6 +165,7 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
           method: "DELETE",
         },
       );
+      setPendingDelete(null);
       await load();
     } catch (error) {
       setError(
@@ -237,19 +238,21 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
           </p>
         </div>
         <div className="addon-actions">
-          <label>
-            <span className="sr-only">Sort add-ons</span>
-            <select
-              value={sort}
-              onChange={(event) =>
-                setSort(event.target.value as "alphabetical" | "newest")
-              }
-              aria-label="Sort add-ons"
-            >
-              <option value="alphabetical">Alphabetical</option>
-              <option value="newest">Date added</option>
-            </select>
-          </label>
+          <Select
+            value={sort}
+            options={
+              [
+                { value: "alphabetical", label: "Alphabetical" },
+                { value: "newest", label: "Date added" },
+              ] as Array<{
+                value: "alphabetical" | "newest";
+                label: string;
+              }>
+            }
+            ariaLabel="Sort add-ons"
+            className="compact-choice"
+            onChange={(next: "alphabetical" | "newest") => setSort(next)}
+          />
           {files.length > 0 && (
             <>
               <a
@@ -379,7 +382,7 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
                 <button
                   className="icon-button danger-icon"
                   title="Delete"
-                  onClick={() => void remove(file)}
+                  onClick={() => setPendingDelete(file)}
                 >
                   <Trash2 size={17} />
                 </button>
@@ -388,6 +391,18 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
           </div>
         )}
       </div>
+      <ConfirmationDialog
+        open={pendingDelete !== null}
+        title="Delete add-on?"
+        body={
+          pendingDelete
+            ? `${pendingDelete.name} will be permanently deleted. Restart the server for the change to take effect.`
+            : ""
+        }
+        confirmLabel="Delete add-on"
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => pendingDelete && void remove(pendingDelete)}
+      />
     </div>
   );
 }

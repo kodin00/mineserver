@@ -1,5 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
-import type { Operation, ServerConfig } from "@mineserver/shared";
+import type {
+  MarketplaceProjectType,
+  Operation,
+  ServerConfig,
+} from "@mineserver/shared";
 
 export interface ServerRow {
   id: string;
@@ -23,6 +27,9 @@ export interface AddonSourceRow {
   server_id: string;
   filename: string;
   provider: string;
+  target: "addons" | "datapacks";
+  project_type: MarketplaceProjectType;
+  level_name: string | null;
   project_id: string;
   project_title: string;
   version_id: string;
@@ -87,6 +94,10 @@ export class Store {
         server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
         filename TEXT NOT NULL,
         provider TEXT NOT NULL,
+        target TEXT NOT NULL DEFAULT 'addons'
+          CHECK(target IN ('addons','datapacks')),
+        project_type TEXT NOT NULL DEFAULT 'mod',
+        level_name TEXT,
         project_id TEXT NOT NULL,
         project_title TEXT NOT NULL,
         version_id TEXT NOT NULL,
@@ -105,8 +116,45 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_addon_share_tokens_expires
         ON addon_share_tokens(expires_at);
-      PRAGMA user_version=4;
     `);
+
+    const version = (
+      this.db.prepare("PRAGMA user_version").get() as { user_version: number }
+    ).user_version;
+    if (version < 5) {
+      const columns = new Set(
+        (
+          this.db.prepare("PRAGMA table_info(addon_sources)").all() as Array<{
+            name: string;
+          }>
+        ).map((column) => column.name),
+      );
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (!columns.has("target")) {
+          this.db.exec(
+            "ALTER TABLE addon_sources ADD COLUMN target TEXT NOT NULL DEFAULT 'addons' CHECK(target IN ('addons','datapacks'))",
+          );
+        }
+        if (!columns.has("project_type")) {
+          this.db.exec(
+            "ALTER TABLE addon_sources ADD COLUMN project_type TEXT NOT NULL DEFAULT 'mod'",
+          );
+        }
+        if (!columns.has("level_name")) {
+          this.db.exec("ALTER TABLE addon_sources ADD COLUMN level_name TEXT");
+        }
+        this.db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_addon_sources_project
+            ON addon_sources(server_id,provider,target,project_id,COALESCE(level_name,''));
+          PRAGMA user_version=5;
+          COMMIT;
+        `);
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    }
   }
 
   getAdmin(): { password_hash: string } | undefined {
@@ -247,48 +295,116 @@ export class Store {
   }
 
   recordAddonSource(entry: AddonSourceRow) {
-    this.db
-      .prepare(
-        `INSERT INTO addon_sources(
-           server_id,filename,provider,project_id,project_title,
-           version_id,version_number,sha512,installed_at
-         ) VALUES(?,?,?,?,?,?,?,?,?)
-         ON CONFLICT(server_id,filename) DO UPDATE SET
-           provider=excluded.provider,
-           project_id=excluded.project_id,
-           project_title=excluded.project_title,
-           version_id=excluded.version_id,
-           version_number=excluded.version_number,
-           sha512=excluded.sha512,
-           installed_at=excluded.installed_at`,
-      )
-      .run(
-        entry.server_id,
-        entry.filename,
-        entry.provider,
-        entry.project_id,
-        entry.project_title,
-        entry.version_id,
-        entry.version_number,
-        entry.sha512,
-        entry.installed_at,
-      );
+    const transaction = this.db.prepare(
+      `INSERT INTO addon_sources(
+         server_id,filename,provider,target,project_type,level_name,
+         project_id,project_title,version_id,version_number,sha512,installed_at
+       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(server_id,provider,target,project_id,COALESCE(level_name,''))
+       DO UPDATE SET
+         filename=excluded.filename,
+         project_type=excluded.project_type,
+         project_title=excluded.project_title,
+         version_id=excluded.version_id,
+         version_number=excluded.version_number,
+         sha512=excluded.sha512,
+         installed_at=excluded.installed_at`,
+    );
+    transaction.run(
+      entry.server_id,
+      entry.filename,
+      entry.provider,
+      entry.target,
+      entry.project_type,
+      entry.level_name,
+      entry.project_id,
+      entry.project_title,
+      entry.version_id,
+      entry.version_number,
+      entry.sha512,
+      entry.installed_at,
+    );
+  }
+
+  updateAddonSource(previous: AddonSourceRow, next: AddonSourceRow) {
+    const transaction = this.db.prepare(
+      `UPDATE addon_sources
+          SET filename=?, project_type=?, project_title=?, version_id=?,
+              version_number=?, sha512=?, installed_at=?
+        WHERE server_id=? AND filename=? AND provider=? AND target=?
+          AND project_id=? AND COALESCE(level_name,'')=COALESCE(?,'')`,
+    );
+    const result = transaction.run(
+      next.filename,
+      next.project_type,
+      next.project_title,
+      next.version_id,
+      next.version_number,
+      next.sha512,
+      next.installed_at,
+      previous.server_id,
+      previous.filename,
+      previous.provider,
+      previous.target,
+      previous.project_id,
+      previous.level_name,
+    );
+    if (result.changes !== 1) {
+      throw new Error("The installed project changed during the update");
+    }
   }
 
   listAddonSources(serverId: string): AddonSourceRow[] {
     return this.db
       .prepare(
-        `SELECT server_id,filename,provider,project_id,project_title,
-                version_id,version_number,sha512,installed_at
+        `SELECT server_id,filename,provider,target,project_type,level_name,
+                project_id,project_title,version_id,version_number,sha512,
+                installed_at
            FROM addon_sources WHERE server_id=? ORDER BY filename`,
       )
       .all(serverId) as unknown as AddonSourceRow[];
+  }
+
+  getAddonSource(
+    serverId: string,
+    provider: string,
+    target: "addons" | "datapacks",
+    projectId: string,
+    levelName: string | null,
+  ): AddonSourceRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT server_id,filename,provider,target,project_type,level_name,
+                project_id,project_title,version_id,version_number,sha512,
+                installed_at
+           FROM addon_sources
+          WHERE server_id=? AND provider=? AND target=? AND project_id=?
+            AND COALESCE(level_name,'')=COALESCE(?,'')`,
+      )
+      .get(serverId, provider, target, projectId, levelName) as
+      AddonSourceRow | undefined;
   }
 
   deleteAddonSource(serverId: string, filename: string) {
     this.db
       .prepare("DELETE FROM addon_sources WHERE server_id=? AND filename=?")
       .run(serverId, filename);
+  }
+
+  deleteAddonSourceProject(
+    serverId: string,
+    provider: string,
+    target: "addons" | "datapacks",
+    projectId: string,
+    levelName: string | null,
+  ) {
+    this.db
+      .prepare(
+        `DELETE FROM addon_sources
+          WHERE server_id=? AND provider=? AND target=? AND project_id=?
+            AND COALESCE(level_name,'')=COALESCE(?,'')`,
+      )
+      .run(serverId, provider, target, projectId, levelName);
   }
 
   pruneAddonShares() {

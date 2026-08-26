@@ -128,7 +128,7 @@ describe("schema upgrade from an existing panel database", () => {
     // Opening it with the current Store must migrate in place.
     const store = new Store(file);
     expect(store.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: 4,
+      user_version: 5,
     });
 
     // The pre-existing row survived, revision counters intact.
@@ -143,6 +143,9 @@ describe("schema upgrade from an existing panel database", () => {
       server_id: "legacy-1",
       filename: "mod.jar",
       provider: "modrinth",
+      target: "addons",
+      project_type: "mod",
+      level_name: null,
       project_id: "AABBCCDD",
       project_title: "Mod",
       version_id: "12345678",

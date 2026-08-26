@@ -99,11 +99,6 @@ export function environmentFor(config: ServerConfig): Record<string, string> {
     environment.OVERRIDE_ICON = "TRUE";
   }
   if (config.seed) environment.SEED = config.seed;
-  if (config.whitelist.length) {
-    environment.ENABLE_WHITELIST = "TRUE";
-    environment.WHITELIST = config.whitelist.join(",");
-  }
-  if (config.operators.length) environment.OPS = config.operators.join(",");
   const properties = Object.entries(config.customProperties)
     .map(([key, value]) => `${key}=${value}`)
     .join("\n");
@@ -154,7 +149,9 @@ export function renderCompose(
             "lazymc.group": `mineserver-${id}`,
             "lazymc.server.address": "mc:25565",
             "lazymc.server.directory": "/server",
-            "lazymc.server.wake_whitelist": String(config.whitelist.length > 0),
+            // Membership is live Minecraft state managed through RCON. The
+            // proxy must not derive policy from compatibility-only config data.
+            "lazymc.server.wake_whitelist": "false",
             "lazymc.server.block_banned_ips": "true",
             ...(["FORGE", "NEOFORGE"].includes(config.type)
               ? { "lazymc.server.forge": "true" }

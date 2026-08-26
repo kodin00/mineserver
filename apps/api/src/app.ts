@@ -15,11 +15,18 @@ import {
   CreateServerSchema,
   LoginSchema,
   MarketplaceSettingsSchema,
+  PlayerActionSchema,
+  WhitelistActionSchema,
   ModrinthInstallSchema,
   ModrinthPreviewSchema,
   ModrinthSearchQuerySchema,
+  ModrinthUpdateSchema,
   ModrinthVersionQuerySchema,
   ServerConfigSchema,
+  ServerFileCreateSchema,
+  ServerFileDeleteSchema,
+  ServerFileMoveSchema,
+  WorldImportSchema,
   addonKind,
   composeUserAgent,
   parseSearchCategories,
@@ -53,15 +60,27 @@ import { JobRunner } from "./jobs.js";
 import { ModrinthClient, type ModrinthApi } from "./modrinth.js";
 import { listDatapacks, resolveLevelName } from "./datapacks.js";
 import {
+  listOnlinePlayers,
+  runPlayerAction,
+  runWhitelistAction,
+} from "./players.js";
+import {
   assertInstallable,
   buildPreview,
-  isInstalling,
+  buildUpdatePreview,
+  marketplaceInventory,
   runInstall,
+  runUpdate,
 } from "./marketplace.js";
 import {
+  createServerFileEntry,
+  deleteServerFileEntry,
+  installServerFileUploads,
   listServerFiles,
+  moveServerFileEntry,
   readServerFile,
   searchServerFiles,
+  serverFileDownload,
   writeServerFile,
 } from "./files.js";
 import {
@@ -71,6 +90,7 @@ import {
   sha256,
   slugify,
 } from "./utils.js";
+import { createWorldExport, importWorld, worldInfo } from "./worlds.js";
 
 const SESSION_COOKIE = "ms_session";
 const CSRF_COOKIE = "ms_csrf";
@@ -433,13 +453,19 @@ export async function buildApp(context: AppContext) {
         },
       );
     }
-    store.updateServer(row.id, serverConfig);
-    await writeCompose(
+    return jobs.mutations.runExclusive(
       row.id,
-      serverConfig,
-      instancePaths(config.instancesRoot, row.id),
+      "server-config-update",
+      async () => {
+        store.updateServer(row.id, serverConfig);
+        await writeCompose(
+          row.id,
+          serverConfig,
+          instancePaths(config.instancesRoot, row.id),
+        );
+        return serverSummary(store.getServer(row.id)!, docker);
+      },
     );
-    return serverSummary(store.getServer(row.id)!, docker);
   });
 
   app.post<{
@@ -450,7 +476,7 @@ export async function buildApp(context: AppContext) {
       throw Object.assign(new Error("Server not found"), { statusCode: 404 });
     const paths = instancePaths(config.instancesRoot, row.id);
     const action = request.params.action;
-    const operation = jobs.run(row.id, action, async () => {
+    const operation = jobs.runExclusive(row.id, action, async () => {
       if (
         ["run", "start", "rebuild", "apply", "restart", "pull"].includes(action)
       ) {
@@ -493,6 +519,56 @@ export async function buildApp(context: AppContext) {
       if (!row)
         throw Object.assign(new Error("Server not found"), { statusCode: 404 });
       return docker.stats(row.id, instancePaths(config.instancesRoot, row.id));
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/players",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      return listOnlinePlayers(
+        docker,
+        row.id,
+        instancePaths(config.instancesRoot, row.id),
+      );
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/players/actions",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const body = PlayerActionSchema.parse(request.body);
+      return jobs.mutations.runExclusive(row.id, "player-action", () =>
+        runPlayerAction(
+          docker,
+          row.id,
+          instancePaths(config.instancesRoot, row.id),
+          body,
+        ),
+      );
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/whitelist/actions",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const body = WhitelistActionSchema.parse(request.body);
+      return jobs.mutations.runExclusive(row.id, "whitelist-action", () =>
+        runWhitelistAction(
+          docker,
+          row.id,
+          instancePaths(config.instancesRoot, row.id),
+          body,
+        ),
+      );
     },
   );
 
@@ -555,12 +631,18 @@ export async function buildApp(context: AppContext) {
       if (!row)
         throw Object.assign(new Error("Server not found"), { statusCode: 404 });
       const body = ConsoleCommandSchema.parse(request.body);
-      const result = await docker.console(
+      return jobs.mutations.runExclusive(
         row.id,
-        instancePaths(config.instancesRoot, row.id),
-        body.command,
+        "console-command",
+        async () => {
+          const result = await docker.console(
+            row.id,
+            instancePaths(config.instancesRoot, row.id),
+            body.command,
+          );
+          return { output: result.stdout.trim() };
+        },
       );
-      return { output: result.stdout.trim() };
     },
   );
 
@@ -628,8 +710,15 @@ export async function buildApp(context: AppContext) {
             `Only JAR and ZIP uploads are accepted: ${invalid.originalName}`,
           );
         const directory = instancePaths(config.instancesRoot, row.id).addons;
-        const installed = await installAddonBatch(uploads, directory);
-        store.touchServerRevision(row.id);
+        const installed = await jobs.mutations.runExclusive(
+          row.id,
+          "addon-upload",
+          async () => {
+            const result = await installAddonBatch(uploads, directory);
+            store.touchServerRevision(row.id);
+            return result;
+          },
+        );
         return reply.code(201).send({ installed, restartRequired: true });
       } finally {
         await Promise.all(
@@ -694,13 +783,15 @@ export async function buildApp(context: AppContext) {
     if (!row)
       throw Object.assign(new Error("Server not found"), { statusCode: 404 });
     const enabled = Boolean((request.body as any)?.enabled);
-    await setAddonEnabled(
-      instancePaths(config.instancesRoot, row.id).addons,
-      decodeURIComponent(request.params.filename),
-      enabled,
-    );
-    store.touchServerRevision(row.id);
-    return { ok: true, restartRequired: true };
+    return jobs.mutations.runExclusive(row.id, "addon-toggle", async () => {
+      await setAddonEnabled(
+        instancePaths(config.instancesRoot, row.id).addons,
+        decodeURIComponent(request.params.filename),
+        enabled,
+      );
+      store.touchServerRevision(row.id);
+      return { ok: true, restartRequired: true };
+    });
   });
 
   app.delete<{
@@ -710,13 +801,15 @@ export async function buildApp(context: AppContext) {
     if (!row)
       throw Object.assign(new Error("Server not found"), { statusCode: 404 });
     const filename = decodeURIComponent(request.params.filename);
-    await removeAddon(
-      instancePaths(config.instancesRoot, row.id).addons,
-      filename,
-    );
-    store.deleteAddonSource(row.id, filename);
-    store.touchServerRevision(row.id);
-    return { ok: true, restartRequired: true };
+    return jobs.mutations.runExclusive(row.id, "addon-delete", async () => {
+      await removeAddon(
+        instancePaths(config.instancesRoot, row.id).addons,
+        filename,
+      );
+      store.deleteAddonSource(row.id, filename);
+      store.touchServerRevision(row.id);
+      return { ok: true, restartRequired: true };
+    });
   });
 
   /**
@@ -897,18 +990,221 @@ export async function buildApp(context: AppContext) {
       // job would answer 202 and then fail, which reads as a broken install
       // rather than a request the panel was never able to honour.
       assertInstallable(rowConfig(row), body.projectType);
-      if (isInstalling(row.id)) {
-        throw Object.assign(
-          new Error("An add-on install is already running for this server"),
-          { statusCode: 409 },
-        );
-      }
       // Download time is unbounded, so this follows the same 202 + operation
       // shape as a backup restore.
-      const operation = jobs.run(row.id, "marketplace-install", () =>
+      const operation = jobs.runExclusive(row.id, "marketplace-install", () =>
         runInstall(marketplaceContext(row), body),
       );
       return reply.code(202).send(operation);
+    },
+  );
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { checkUpdates?: string };
+  }>("/api/servers/:id/marketplace/inventory", async (request) => {
+    assertMarketplaceEnabled();
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    return {
+      items: await marketplaceInventory(
+        marketplaceContext(row),
+        request.query.checkUpdates === "true",
+      ),
+    };
+  });
+
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/modrinth/update/preview",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request) => {
+      assertMarketplaceEnabled();
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const body = ModrinthUpdateSchema.parse(request.body);
+      return buildUpdatePreview(marketplaceContext(row), body);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/modrinth/update",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      assertMarketplaceEnabled();
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const body = ModrinthUpdateSchema.parse(request.body);
+      await buildUpdatePreview(marketplaceContext(row), body);
+      const operation = jobs.runExclusive(row.id, "marketplace-update", () =>
+        runUpdate(marketplaceContext(row), body),
+      );
+      return reply.code(202).send(operation);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/world",
+    async (request) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      return worldInfo(
+        row.id,
+        instancePaths(config.instancesRoot, row.id),
+        rowConfig(row),
+        docker,
+      );
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/world/export",
+    async (request, reply) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const temp = await createTempUpload(config.tempRoot);
+      temp.stream.end();
+      await new Promise<void>((resolve, reject) => {
+        temp.stream.once("close", resolve);
+        temp.stream.once("error", reject);
+      });
+      await rm(temp.path, { force: true });
+      const lease = jobs.mutations.acquire(row.id, "world-export");
+      try {
+        const exported = await createWorldExport(
+          row.id,
+          instancePaths(config.instancesRoot, row.id),
+          rowConfig(row),
+          docker,
+          temp.path,
+        );
+        const info = await stat(temp.path);
+        reply.header(
+          "content-disposition",
+          `attachment; filename*=UTF-8''${encodeURIComponent(`${row.slug}-${exported.filename}`)}`,
+        );
+        reply.header("content-length", String(info.size));
+        reply.header("cache-control", "no-store, private, max-age=0");
+        reply.header("x-content-type-options", "nosniff");
+        reply.type("application/zip");
+        const stream = createReadStream(temp.path);
+        let cleaned = false;
+        const cleanup = () => {
+          if (cleaned) return;
+          cleaned = true;
+          lease.release();
+          void rm(temp.path, { force: true });
+        };
+        stream.once("close", cleanup);
+        stream.once("error", cleanup);
+        reply.raw.once("close", cleanup);
+        return reply.send(stream);
+      } catch (error) {
+        lease.release();
+        await rm(temp.path, { force: true });
+        throw error;
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/world/import",
+    async (request, reply) => {
+      const row = store.getServer(request.params.id);
+      if (!row)
+        throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+      const paths = instancePaths(config.instancesRoot, row.id);
+      const currentLevelName = await resolveLevelName(
+        paths.data,
+        rowConfig(row),
+      );
+      const runtime = await docker.status(row.id, paths);
+      if (runtime.state !== "stopped") {
+        throw Object.assign(
+          new Error("Stop the server before importing a world"),
+          {
+            statusCode: 409,
+          },
+        );
+      }
+
+      let upload: { path: string } | null = null;
+      let fields: Record<string, string> = {};
+      let totalBytes = 0;
+      try {
+        for await (const part of request.parts()) {
+          if (part.type === "file") {
+            if (upload) throw new Error("Choose exactly one world ZIP");
+            if (!part.filename.toLowerCase().endsWith(".zip")) {
+              throw new Error("Only ZIP world archives are accepted");
+            }
+            const temp = await createTempUpload(config.tempRoot);
+            upload = { path: temp.path };
+            const enforceTotalLimit = new Transform({
+              transform(chunk, _encoding, callback) {
+                totalBytes += chunk.length;
+                if (totalBytes > config.MAX_UPLOAD_BYTES) {
+                  callback(
+                    Object.assign(
+                      new Error("Upload exceeds the configured size limit"),
+                      { statusCode: 413 },
+                    ),
+                  );
+                } else callback(null, chunk);
+              },
+            });
+            await pipeline(part.file, enforceTotalLimit, temp.stream);
+            if (part.file.truncated) {
+              throw Object.assign(
+                new Error("Upload exceeds the configured size limit"),
+                { statusCode: 413 },
+              );
+            }
+          } else {
+            fields[part.fieldname] = String(part.value);
+          }
+        }
+        if (!upload) throw new Error("Choose a world ZIP to import");
+        const body = WorldImportSchema.parse({
+          acknowledgeLevelName: fields.acknowledgeLevelName,
+          overwrite: fields.overwrite === "true",
+        });
+        if (body.acknowledgeLevelName !== currentLevelName) {
+          throw Object.assign(
+            new Error(
+              `The active world changed to ${currentLevelName}. Review the import again.`,
+            ),
+            { statusCode: 409 },
+          );
+        }
+        const uploadPath = upload.path;
+        const operation = jobs.runExclusive(
+          row.id,
+          "world-import",
+          async () => {
+            try {
+              return await importWorld(
+                row.id,
+                uploadPath,
+                paths,
+                rowConfig(row),
+                docker,
+                body.acknowledgeLevelName,
+              );
+            } finally {
+              await rm(uploadPath, { force: true });
+            }
+          },
+        );
+        upload = null;
+        return reply.code(202).send(operation);
+      } finally {
+        if (upload) await rm(upload.path, { force: true });
+      }
     },
   );
 
@@ -960,7 +1256,7 @@ export async function buildApp(context: AppContext) {
         throw Object.assign(new Error("Server not found"), { statusCode: 404 });
       const filename = decodeURIComponent(request.params.filename);
       const paths = instancePaths(config.instancesRoot, row.id);
-      const operation = jobs.run(row.id, "restore", () =>
+      const operation = jobs.runExclusive(row.id, "restore", () =>
         restoreBackup(row.id, filename, paths, docker),
       );
       return reply.code(202).send(operation);
@@ -973,11 +1269,13 @@ export async function buildApp(context: AppContext) {
       const row = store.getServer(request.params.id);
       if (!row)
         throw Object.assign(new Error("Server not found"), { statusCode: 404 });
-      await removeBackup(
-        instancePaths(config.instancesRoot, row.id).backups,
-        decodeURIComponent(request.params.filename),
-      );
-      return { ok: true };
+      return jobs.mutations.runExclusive(row.id, "backup-delete", async () => {
+        await removeBackup(
+          instancePaths(config.instancesRoot, row.id).backups,
+          decodeURIComponent(request.params.filename),
+        );
+        return { ok: true };
+      });
     },
   );
 
@@ -1007,6 +1305,140 @@ export async function buildApp(context: AppContext) {
       instancePaths(config.instancesRoot, row.id).data,
       query,
     );
+  });
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { path?: string };
+  }>("/api/servers/:id/files/download", async (request, reply) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    if (!request.query.path) throw new Error("File path is required");
+    const download = await serverFileDownload(
+      instancePaths(config.instancesRoot, row.id).data,
+      request.query.path,
+    );
+    reply.header(
+      "content-disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(download.filename)}`,
+    );
+    reply.header("content-length", String(download.size));
+    reply.header("x-content-type-options", "nosniff");
+    reply.type("application/octet-stream");
+    return reply.send(download.stream);
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: { parentPath?: string; name?: string; type?: string };
+  }>("/api/servers/:id/files", async (request, reply) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const { parentPath, name, type } = ServerFileCreateSchema.parse(
+      request.body,
+    );
+    const entry = await jobs.mutations.runExclusive(row.id, "file-create", () =>
+      createServerFileEntry(
+        instancePaths(config.instancesRoot, row.id).data,
+        parentPath,
+        name,
+        type,
+      ),
+    );
+    return reply.code(201).send(entry);
+  });
+
+  app.post<{
+    Params: { id: string };
+    Querystring: { path?: string };
+  }>("/api/servers/:id/files/upload", async (request, reply) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const uploads: Array<{ path: string; originalName: string }> = [];
+    let totalBytes = 0;
+    try {
+      for await (const file of request.files()) {
+        const temp = await createTempUpload(config.tempRoot);
+        uploads.push({ path: temp.path, originalName: file.filename });
+        const enforceTotalLimit = new Transform({
+          transform(chunk, _encoding, callback) {
+            totalBytes += chunk.length;
+            if (totalBytes > config.MAX_UPLOAD_BYTES) {
+              callback(
+                Object.assign(
+                  new Error("Upload exceeds the configured size limit"),
+                  { statusCode: 413 },
+                ),
+              );
+            } else {
+              callback(null, chunk);
+            }
+          },
+        });
+        await pipeline(file.file, enforceTotalLimit, temp.stream);
+        if (file.file.truncated)
+          throw Object.assign(
+            new Error("Upload exceeds the configured size limit"),
+            { statusCode: 413 },
+          );
+      }
+      if (uploads.length === 0) throw new Error("Choose one or more files");
+      const files = await jobs.mutations.runExclusive(
+        row.id,
+        "file-upload",
+        () =>
+          installServerFileUploads(
+            instancePaths(config.instancesRoot, row.id).data,
+            request.query.path ?? "",
+            uploads,
+          ),
+      );
+      return reply.code(201).send({ files });
+    } finally {
+      await Promise.all(
+        uploads.map((upload) => rm(upload.path, { force: true })),
+      );
+    }
+  });
+
+  app.patch<{
+    Params: { id: string };
+    Body: { path?: string; destinationPath?: string };
+  }>("/api/servers/:id/files", async (request) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const { path: sourcePath, destinationPath } = ServerFileMoveSchema.parse(
+      request.body,
+    );
+    return jobs.mutations.runExclusive(row.id, "file-move", () =>
+      moveServerFileEntry(
+        instancePaths(config.instancesRoot, row.id).data,
+        sourcePath,
+        destinationPath,
+      ),
+    );
+  });
+
+  app.delete<{
+    Params: { id: string };
+    Querystring: { path?: string; expectedModifiedAt?: string };
+  }>("/api/servers/:id/files", async (request, reply) => {
+    const row = store.getServer(request.params.id);
+    if (!row)
+      throw Object.assign(new Error("Server not found"), { statusCode: 404 });
+    const deletion = ServerFileDeleteSchema.parse(request.query);
+    await jobs.mutations.runExclusive(row.id, "file-delete", () =>
+      deleteServerFileEntry(
+        instancePaths(config.instancesRoot, row.id).data,
+        deletion.path,
+        deletion.expectedModifiedAt,
+      ),
+    );
+    return reply.code(204).send();
   });
 
   app.get<{
@@ -1044,12 +1476,14 @@ export async function buildApp(context: AppContext) {
     ) {
       throw new Error("Invalid file update");
     }
-    return writeServerFile(
-      instancePaths(config.instancesRoot, row.id).data,
-      filePath,
-      content,
-      expectedModifiedAt,
-      config.MAX_EDIT_FILE_BYTES,
+    return jobs.mutations.runExclusive(row.id, "file-write", () =>
+      writeServerFile(
+        instancePaths(config.instancesRoot, row.id).data,
+        filePath,
+        content,
+        expectedModifiedAt,
+        config.MAX_EDIT_FILE_BYTES,
+      ),
     );
   });
 
@@ -1069,20 +1503,22 @@ export async function buildApp(context: AppContext) {
     const row = store.getServer(request.params.id);
     if (!row)
       throw Object.assign(new Error("Server not found"), { statusCode: 404 });
-    const paths = instancePaths(config.instancesRoot, row.id);
-    await docker.down(row.id, paths).catch(() => undefined);
-    if (request.query.permanent === "true") {
-      await rm(paths.root, { recursive: true, force: true });
-    } else if (await pathExists(paths.root)) {
-      const archiveRoot = path.join(config.DATA_ROOT, "archived");
-      await mkdir(archiveRoot, { recursive: true });
-      await rename(
-        paths.root,
-        path.join(archiveRoot, `${row.slug}-${Date.now()}`),
-      );
-    }
-    store.deleteServer(row.id);
-    return { ok: true };
+    return jobs.mutations.runExclusive(row.id, "server-delete", async () => {
+      const paths = instancePaths(config.instancesRoot, row.id);
+      await docker.down(row.id, paths).catch(() => undefined);
+      if (request.query.permanent === "true") {
+        await rm(paths.root, { recursive: true, force: true });
+      } else if (await pathExists(paths.root)) {
+        const archiveRoot = path.join(config.DATA_ROOT, "archived");
+        await mkdir(archiveRoot, { recursive: true });
+        await rename(
+          paths.root,
+          path.join(archiveRoot, `${row.slug}-${Date.now()}`),
+        );
+      }
+      store.deleteServer(row.id);
+      return { ok: true };
+    });
   });
 
   app.get("/ws/operations", { websocket: true }, (socket) => {

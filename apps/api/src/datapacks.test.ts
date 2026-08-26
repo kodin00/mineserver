@@ -1,5 +1,12 @@
 import path from "node:path";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { ZipArchive } from "archiver";
@@ -168,14 +175,18 @@ describe("installDatapack", () => {
     ).toBe(true);
   });
 
-  it("refuses to overwrite an existing datapack", async () => {
+  it("refuses to overwrite an existing datapack case-insensitively", async () => {
     const { dataDir, tempRoot } = await workspace();
     const first = await stageZip(tempRoot, [manifest]);
-    await installDatapack(first, "pack.zip", dataDir, "world");
+    await installDatapack(first, "Pack.ZIP", dataDir, "world");
+    const target = path.join(dataDir, "world", "datapacks", "Pack.ZIP");
+    const original = await readFile(target);
     const second = await stageZip(tempRoot, [manifest]);
     await expect(
       installDatapack(second, "pack.zip", dataDir, "world"),
     ).rejects.toThrow(/already exists/);
+    expect(await readFile(target)).toEqual(original);
+    expect(await pathExists(second)).toBe(true);
   });
 
   it("rejects a jar with a pointer to the add-ons flow", async () => {

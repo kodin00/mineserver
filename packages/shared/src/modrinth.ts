@@ -207,6 +207,55 @@ export const ModrinthInstallSchema = z.object({
 });
 export type ModrinthInstallInput = z.infer<typeof ModrinthInstallSchema>;
 
+export const ModrinthUpdateSchema = z.object({
+  projectId: z.string().trim().min(1).max(64),
+  currentVersionId: versionIdSchema,
+  versionId: versionIdSchema,
+  projectType: MarketplaceProjectTypeSchema,
+  includeRequiredDependencies: z.boolean().default(false),
+  acknowledgeLevelName: z.string().trim().max(64).optional(),
+});
+export type ModrinthUpdateInput = z.infer<typeof ModrinthUpdateSchema>;
+
+export type MarketplaceInstallState =
+  "installed" | "downloaded" | "update-available" | "modified";
+
+export interface MarketplaceUpdateCandidate {
+  versionId: string;
+  versionNumber: string;
+  filename: string;
+  sizeBytes: number;
+  versionType: VersionChannel;
+  datePublished: string | null;
+}
+
+export interface MarketplaceInventoryItem {
+  provider: "modrinth";
+  target: "addons" | "datapacks";
+  projectType: MarketplaceProjectType;
+  projectId: string;
+  projectTitle: string;
+  versionId: string;
+  versionNumber: string;
+  filename: string;
+  levelName: string | null;
+  enabled: boolean | null;
+  installedAt: string;
+  state: MarketplaceInstallState;
+  updateCandidate: MarketplaceUpdateCandidate | null;
+}
+
+export interface ModrinthUpdatePreview extends ModrinthInstallPreview {
+  current: {
+    projectId: string;
+    versionId: string;
+    versionNumber: string;
+    filename: string;
+  };
+  candidate: MarketplaceUpdateCandidate;
+  filenameChanges: boolean;
+}
+
 export interface ModrinthSearchHit {
   projectId: string;
   slug: string;

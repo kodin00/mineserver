@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { ExternalLink, LoaderCircle, Package } from "lucide-react";
 import {
   modrinthProjectUrl,
+  type MarketplaceInventoryItem,
   type MarketplaceProjectType,
   type ModrinthSearchHit,
+  type ModrinthUpdatePreview,
   type ModrinthVersionSummary,
   type Operation,
   type ServerSummary,
@@ -24,6 +26,7 @@ export function InstallDialog({
   projectType,
   gameVersion,
   installedNames,
+  installedProject,
   onClose,
   onInstalled,
 }: {
@@ -32,6 +35,7 @@ export function InstallDialog({
   projectType: MarketplaceProjectType;
   gameVersion: string;
   installedNames: Set<string>;
+  installedProject: MarketplaceInventoryItem | null;
   onClose(): void;
   onInstalled(operation: Operation): void;
 }) {
@@ -40,6 +44,8 @@ export function InstallDialog({
   const [selected, setSelected] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [preview, setPreview] = useState<ModrinthUpdatePreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
   const [withDependencies, setWithDependencies] = useState(true);
   const [error, setError] = useState("");
 
@@ -58,6 +64,7 @@ export function InstallDialog({
     if (!slug) {
       setVersions([]);
       setSelected("");
+      setPreview(null);
       setError("");
       setWithDependencies(true);
       return;
@@ -78,7 +85,13 @@ export function InstallDialog({
       .then((response) => {
         if (cancelled) return;
         setVersions(response.versions);
-        setSelected(pickDefaultVersion(response.versions)?.id ?? "");
+        const preferred = installedProject?.updateCandidate?.versionId;
+        setSelected(
+          (preferred &&
+          response.versions.some((version) => version.id === preferred)
+            ? preferred
+            : pickDefaultVersion(response.versions)?.id) ?? "",
+        );
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
@@ -94,36 +107,103 @@ export function InstallDialog({
     return () => {
       cancelled = true;
     };
-  }, [slug, projectType, gameVersion, server.config.type]);
+  }, [
+    slug,
+    projectType,
+    gameVersion,
+    server.config.type,
+    installedProject?.updateCandidate?.versionId,
+  ]);
 
   const chosen = versions.find((version) => version.id === selected) ?? null;
   const description = project?.description ?? "";
   const chosenFile = chosen ? primaryFile(chosen) : null;
   const required = chosen ? requiredDependencies(chosen) : [];
   const unidentified = required.some((entry) => entry.projectId === null);
-  const alreadyInstalled = isVersionInstalled(
-    chosenFile?.filename ?? null,
-    installedNames,
-  );
+  const alreadyInstalled = installedProject
+    ? chosen?.id === installedProject.versionId
+    : isVersionInstalled(chosenFile?.filename ?? null, installedNames);
   // A project with no stable build is common on a brand-new Minecraft version,
   // so say so rather than hiding the prereleases.
   const noRelease =
     versions.length > 0 &&
     !versions.some((version) => version.versionType === "release");
 
+  useEffect(() => {
+    setPreview(null);
+    if (!installedProject || !chosen || !open) {
+      setPreviewing(false);
+      return;
+    }
+    let cancelled = false;
+    setPreviewing(true);
+    setError("");
+    void api<ModrinthUpdatePreview>(
+      `/api/servers/${server.id}/modrinth/update/preview`,
+      {
+        method: "POST",
+        ...jsonBody({
+          projectId: installedProject.projectId,
+          currentVersionId: installedProject.versionId,
+          versionId: chosen.id,
+          projectType,
+          includeRequiredDependencies: withDependencies,
+          ...(installedProject.levelName
+            ? { acknowledgeLevelName: installedProject.levelName }
+            : {}),
+        }),
+      },
+    )
+      .then((response) => {
+        if (!cancelled) setPreview(response);
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "Unable to review this update",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    chosen?.id,
+    installedProject,
+    open,
+    projectType,
+    server.id,
+    withDependencies,
+  ]);
+
   async function install() {
     if (!chosen) return;
     setInstalling(true);
     setError("");
     try {
+      const update = installedProject !== null;
       const operation = await api<Operation>(
-        `/api/servers/${server.id}/modrinth/install`,
+        `/api/servers/${server.id}/modrinth/${update ? "update" : "install"}`,
         {
           method: "POST",
           ...jsonBody({
+            ...(update
+              ? {
+                  projectId: installedProject.projectId,
+                  currentVersionId: installedProject.versionId,
+                }
+              : {}),
             versionId: chosen.id,
             projectType,
             includeRequiredDependencies: withDependencies,
+            ...(installedProject?.levelName
+              ? { acknowledgeLevelName: installedProject.levelName }
+              : {}),
           }),
         },
       );
@@ -166,7 +246,10 @@ export function InstallDialog({
             )}
           </span>
           <div>
-            <h2 id="install-dialog-title">{project?.title ?? ""}</h2>
+            <h2 id="install-dialog-title">
+              {installedProject ? "Update " : ""}
+              {project?.title ?? ""}
+            </h2>
             <small className="muted">
               {project?.author ? `by ${project.author}` : "Unknown author"}
             </small>
@@ -184,6 +267,14 @@ export function InstallDialog({
         <p className="muted install-dialog-description">{description}</p>
 
         {error && <ErrorBanner message={error} />}
+
+        {installedProject && (
+          <p className="notice-banner">
+            Currently installed: {installedProject.versionNumber} (
+            {installedProject.filename}). Review and select one compatible
+            version below before updating.
+          </p>
+        )}
 
         {noRelease && (
           <p className="notice-banner">
@@ -210,10 +301,9 @@ export function InstallDialog({
             <ul className="explorer-list install-version-list">
               {versions.map((version) => {
                 const file = primaryFile(version);
-                const installed = isVersionInstalled(
-                  file?.filename ?? null,
-                  installedNames,
-                );
+                const installed = installedProject
+                  ? version.id === installedProject.versionId
+                  : isVersionInstalled(file?.filename ?? null, installedNames);
                 return (
                   <li key={version.id}>
                     <button
@@ -245,6 +335,24 @@ export function InstallDialog({
               })}
             </ul>
           </>
+        )}
+
+        {installedProject && previewing && (
+          <p className="muted">
+            <LoaderCircle className="spin" size={15} /> Reviewing update…
+          </p>
+        )}
+
+        {installedProject && preview && (
+          <div className="notice-banner">
+            <strong>Update review</strong>
+            <br />
+            {preview.current.versionNumber} → {preview.candidate.versionNumber}
+            <br />
+            {preview.filenameChanges
+              ? `${preview.current.filename} → ${preview.candidate.filename}`
+              : preview.candidate.filename}
+          </div>
         )}
 
         {required.length > 0 && (
@@ -290,14 +398,27 @@ export function InstallDialog({
           <button
             className="button primary"
             onClick={() => void install()}
-            disabled={!chosen || installing || alreadyInstalled}
+            disabled={
+              !chosen ||
+              installing ||
+              previewing ||
+              alreadyInstalled ||
+              (installedProject !== null &&
+                (chosen.id === installedProject.versionId || !preview))
+            }
           >
             {installing ? (
               <>
                 <LoaderCircle className="spin" size={15} /> Starting…
               </>
-            ) : alreadyInstalled ? (
+            ) : previewing ? (
+              "Reviewing…"
+            ) : alreadyInstalled ||
+              (installedProject !== null &&
+                chosen?.id === installedProject.versionId) ? (
               "Already installed"
+            ) : installedProject ? (
+              "Update"
             ) : (
               "Install"
             )}

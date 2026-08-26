@@ -5,6 +5,7 @@ import {
   Boxes,
   DatabaseBackup,
   FolderTree,
+  Globe2,
   LayoutDashboard,
   PackageSearch,
   RefreshCw,
@@ -12,6 +13,7 @@ import {
   Settings,
   SquareTerminal,
   TriangleAlert,
+  Users,
 } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import type { ServerSummary } from "@mineserver/shared";
@@ -25,14 +27,18 @@ import { BackupsTab } from "./server/BackupsTab";
 import { SettingsTab } from "./server/SettingsTab";
 import { FilesTab } from "./server/FilesTab";
 import { DockerLogsTab } from "./server/DockerLogsTab";
+import { WorldsTab } from "./server/WorldsTab";
+import { PlayersTab } from "./server/PlayersTab";
 
 const tabs = [
   ["overview", "Overview", LayoutDashboard],
+  ["players", "Players", Users],
   ["console", "Console", SquareTerminal],
   ["docker-logs", "Docker logs", ScrollText],
   ["addons", "Add-ons", Boxes],
   ["browse", "Browse", PackageSearch],
   ["files", "Files", FolderTree],
+  ["world", "World", Globe2],
   ["backups", "Backups", DatabaseBackup],
   ["settings", "Settings", Settings],
 ] as const;
@@ -148,6 +154,7 @@ export function ServerPage() {
         ))}
       </nav>
       {tab === "overview" && <OverviewTab server={server} refresh={load} />}
+      {tab === "players" && <PlayersTab server={server} />}
       {tab === "console" && <ConsoleTab server={server} />}
       {tab === "docker-logs" && <DockerLogsTab server={server} />}
       {tab === "addons" && <AddonsTab server={server} />}
@@ -155,6 +162,7 @@ export function ServerPage() {
         <BrowseTab server={server} refresh={load} />
       )}
       {tab === "files" && <FilesTab server={server} />}
+      {tab === "world" && <WorldsTab server={server} refreshServer={load} />}
       {tab === "backups" && <BackupsTab server={server} refreshServer={load} />}
       {tab === "settings" && <SettingsTab server={server} refresh={load} />}
     </Layout>

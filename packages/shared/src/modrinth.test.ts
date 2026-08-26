@@ -4,11 +4,38 @@ import {
   concreteGameVersion,
   loaderFacetsFor,
   marketplaceTargetFor,
+  ModrinthUpdateSchema,
   modrinthProjectTypes,
   parseSearchCategories,
   supportedMarketplaceTypes,
 } from "./modrinth.js";
 import { serverTypes } from "./index.js";
+
+describe("marketplace update contracts", () => {
+  it("requires a reviewed current version and a distinct candidate", () => {
+    expect(
+      ModrinthUpdateSchema.parse({
+        projectId: "project-id",
+        currentVersionId: "Abc12345",
+        versionId: "Def67890",
+        projectType: "mod",
+      }),
+    ).toMatchObject({
+      projectId: "project-id",
+      currentVersionId: "Abc12345",
+      versionId: "Def67890",
+      includeRequiredDependencies: false,
+    });
+    expect(
+      ModrinthUpdateSchema.safeParse({
+        projectId: "project-id",
+        currentVersionId: "not-an-id",
+        versionId: "Def67890",
+        projectType: "mod",
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe("concreteGameVersion", () => {
   it.each([

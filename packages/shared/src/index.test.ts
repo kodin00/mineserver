@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { ServerConfigSchema, addonKind, automaticJavaTag } from "./index.js";
+import {
+  PlayerActionSchema,
+  ServerConfigSchema,
+  ServerFileCreateSchema,
+  ServerFileMoveSchema,
+  WorldImportSchema,
+  addonKind,
+  automaticJavaTag,
+} from "./index.js";
 
 describe("automaticJavaTag", () => {
   it.each([
@@ -12,6 +20,71 @@ describe("automaticJavaTag", () => {
     ["LATEST", "stable"],
   ])("maps %s to %s", (version, expected) => {
     expect(automaticJavaTag(version)).toBe(expected);
+  });
+});
+
+describe("administration contracts", () => {
+  it("accepts supported player actions and rejects command injection", () => {
+    expect(
+      PlayerActionSchema.parse({
+        action: "ban",
+        player: "Example_1",
+        reason: "Repeated griefing",
+      }),
+    ).toMatchObject({ action: "ban", player: "Example_1" });
+    expect(
+      PlayerActionSchema.safeParse({
+        action: "kick",
+        player: "Example_1",
+        reason: "first line\nstop",
+      }).success,
+    ).toBe(false);
+    expect(
+      PlayerActionSchema.safeParse({ action: "op", player: "name with spaces" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("validates file mutations without allowing root or traversal targets", () => {
+    expect(
+      ServerFileCreateSchema.parse({
+        parentPath: "config",
+        name: "settings.toml",
+        type: "file",
+      }),
+    ).toMatchObject({ parentPath: "config", name: "settings.toml" });
+    expect(
+      ServerFileCreateSchema.safeParse({
+        parentPath: "config/../outside",
+        name: "bad.txt",
+        type: "file",
+      }).success,
+    ).toBe(false);
+    expect(
+      ServerFileMoveSchema.safeParse({ path: "", destinationPath: "target" })
+        .success,
+    ).toBe(false);
+    expect(
+      ServerFileMoveSchema.safeParse({
+        path: "config/a",
+        destinationPath: "config/a",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires an explicit active-world acknowledgement for import", () => {
+    expect(
+      WorldImportSchema.parse({
+        acknowledgeLevelName: "survival world",
+        overwrite: true,
+      }),
+    ).toEqual({ acknowledgeLevelName: "survival world", overwrite: true });
+    expect(
+      WorldImportSchema.safeParse({
+        acknowledgeLevelName: "world",
+        overwrite: false,
+      }).success,
+    ).toBe(false);
   });
 });
 
