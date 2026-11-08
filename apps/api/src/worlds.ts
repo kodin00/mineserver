@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
-import type { ServerConfig, ServerState, WorldInfo } from "@mineserver/shared";
+import type { ServerConfig, WorldInfo } from "@mineserver/shared";
 import { createZipFromDirectory } from "./backups.js";
 import type { InstancePaths } from "./compose.js";
 import { config } from "./config.js";
@@ -571,8 +571,4 @@ export async function importWorld(
       await fileOperations.remove(rollback, { recursive: true, force: true });
     }
   }
-}
-
-export function worldStateCanExport(state: ServerState): boolean {
-  return state === "running" || state === "stopped";
 }

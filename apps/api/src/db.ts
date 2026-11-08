@@ -436,6 +436,24 @@ export class Store {
       .run(new Date().toISOString());
   }
 
+  /** Keeps only the newest `keep` operations per server (and global ones). */
+  pruneOperations(keep = 500) {
+    this.db
+      .prepare(
+        `DELETE FROM operations WHERE id IN (
+           SELECT id FROM (
+             SELECT id,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY COALESCE(server_id, '')
+                      ORDER BY created_at DESC, id DESC
+                    ) AS rank
+             FROM operations
+           ) WHERE rank > ?
+         )`,
+      )
+      .run(keep);
+  }
+
   listServers(): ServerRow[] {
     return this.db
       .prepare("SELECT * FROM servers ORDER BY created_at DESC")

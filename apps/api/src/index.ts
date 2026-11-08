@@ -1,4 +1,5 @@
-import { buildApp, createContext } from "./app.js";
+import { buildApp } from "./app.js";
+import { createContext } from "./startup.js";
 import { config } from "./config.js";
 
 const KNOWN_INSECURE_PASSWORDS = [
