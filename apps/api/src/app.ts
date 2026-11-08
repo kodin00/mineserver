@@ -1543,6 +1543,10 @@ export async function buildApp(context: AppContext) {
         row.id,
         instancePaths(config.instancesRoot, row.id),
       );
+      child.on("error", () => {
+        if (socket.readyState === socket.OPEN)
+          socket.close(1011, "log stream failed");
+      });
       const send = (chunk: Buffer) => {
         if (socket.readyState === socket.OPEN) socket.send(chunk.toString());
       };

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createReadStream, type ReadStream } from "node:fs";
 import {
+  copyFile,
   chmod,
   chown,
   lstat,
@@ -353,28 +354,21 @@ export async function installServerFileUploads(
       destination: await resolveNewLeaf(root, entryPath(parent, leaf)),
     })),
   );
-  const reservations = new Map<
-    string,
-    { handle: Awaited<ReturnType<typeof open>>; committed: boolean }
-  >();
+  const reservations = new Map<string, { committed: boolean }>();
   const committed: typeof destinations = [];
   try {
     for (const item of destinations) {
-      const handle = await open(item.destination.target, "wx", fileMode);
-      reservations.set(item.destination.target, { handle, committed: false });
+      reservations.set(item.destination.target, { committed: false });
     }
     for (const item of destinations) {
       const reservation = reservations.get(item.destination.target)!;
-      let source: Awaited<ReturnType<typeof open>> | null = null;
       try {
-        source = await open(item.upload.path, "r");
-        const contents = await source.readFile();
-        await reservation.handle.writeFile(contents);
+        // Streamed copy: uploads can be up to MAX_UPLOAD_BYTES (2 GiB), so
+        // never buffer the whole file in memory.
+        await copyFile(item.upload.path, item.destination.target);
         reservation.committed = true;
         committed.push(item);
       } finally {
-        await source?.close().catch(() => undefined);
-        await reservation.handle.close().catch(() => undefined);
         if (reservation.committed) reservations.delete(item.destination.target);
       }
       await rm(item.upload.path);
@@ -382,8 +376,7 @@ export async function installServerFileUploads(
     }
   } catch (error) {
     await Promise.all(
-      [...reservations.entries()].map(async ([target, reservation]) => {
-        await reservation.handle.close().catch(() => undefined);
+      [...reservations.keys()].map(async (target) => {
         await rm(target, { force: true });
       }),
     );

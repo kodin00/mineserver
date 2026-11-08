@@ -1,5 +1,5 @@
 import { CronExpressionParser } from "cron-parser";
-import { ServerConfigSchema } from "@mineserver/shared";
+import { ServerConfigSchema, type ServerConfig } from "@mineserver/shared";
 import { createBackup } from "./backups.js";
 import { instancePaths } from "./compose.js";
 import { config } from "./config.js";
@@ -21,8 +21,16 @@ export class BackupScheduler {
 
   start() {
     if (this.timer) return;
-    void this.tick();
-    this.timer = setInterval(() => void this.tick(), 30_000);
+    void this.tick().catch((error) => {
+      console.error("[mineserver] Backup scheduler tick failed:", error);
+    });
+    this.timer = setInterval(
+      () =>
+        void this.tick().catch((error) => {
+          console.error("[mineserver] Backup scheduler tick failed:", error);
+        }),
+      30_000,
+    );
     this.timer.unref();
   }
 
@@ -38,9 +46,16 @@ export class BackupScheduler {
       const now = new Date();
       const minute = Math.floor(now.getTime() / 60_000) * 60_000;
       for (const row of this.store.listServers()) {
-        const serverConfig = ServerConfigSchema.parse(
-          JSON.parse(row.config_json),
-        );
+        let serverConfig: ServerConfig;
+        try {
+          serverConfig = ServerConfigSchema.parse(JSON.parse(row.config_json));
+        } catch (error) {
+          console.error(
+            `[mineserver] Skipping server ${row.id} in backup scheduler: unparseable config`,
+            error,
+          );
+          continue;
+        }
         if (!serverConfig.backups.enabled) continue;
         let scheduled: number;
         try {
@@ -60,11 +75,14 @@ export class BackupScheduler {
         ) {
           continue;
         }
-        this.lastRun.set(row.id, minute);
         const paths = instancePaths(config.instancesRoot, row.id);
         if (await pathExists(paths.backupMigrationMarker)) continue;
         const runtime = await this.docker.status(row.id, paths);
         if (runtime.state !== "running") continue;
+        // Mark only after every pre-condition passed: a server that is not
+        // running during its scheduled minute must keep the minute claimable
+        // by a later tick instead of silently skipping the backup.
+        this.lastRun.set(row.id, minute);
         try {
           this.jobs.runExclusive(row.id, "scheduled-backup", () =>
             createBackup(row.id, paths, this.docker, serverConfig.backups),
