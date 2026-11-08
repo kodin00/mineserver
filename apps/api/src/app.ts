@@ -17,6 +17,7 @@ import {
   MarketplaceSettingsSchema,
   PlayerActionSchema,
   WhitelistActionSchema,
+  AddonToggleSchema,
   ModrinthInstallSchema,
   ModrinthPreviewSchema,
   ModrinthSearchQuerySchema,
@@ -176,15 +177,18 @@ function errorMessage(error: unknown): string {
 }
 
 async function fetchMetadata() {
+  // Bounded: a hung upstream must not hold the request open indefinitely.
+  const signal = AbortSignal.timeout(10_000);
   const [versions, images] = await Promise.allSettled([
-    fetch(
-      "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
-    ).then((res) => {
+    fetch("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", {
+      signal,
+    }).then((res) => {
       if (!res.ok) throw new Error("Version service unavailable");
       return res.json();
     }),
     fetch(
       "https://raw.githubusercontent.com/itzg/docker-minecraft-server/refs/heads/master/images.json",
+      { signal },
     ).then((res) => {
       if (!res.ok) throw new Error("Image metadata unavailable");
       return res.json();
@@ -782,7 +786,7 @@ export async function buildApp(context: AppContext) {
     const row = store.getServer(request.params.id);
     if (!row)
       throw Object.assign(new Error("Server not found"), { statusCode: 404 });
-    const enabled = Boolean((request.body as any)?.enabled);
+    const { enabled } = AddonToggleSchema.parse(request.body);
     return jobs.mutations.runExclusive(row.id, "addon-toggle", async () => {
       await setAddonEnabled(
         instancePaths(config.instancesRoot, row.id).addons,

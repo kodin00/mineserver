@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, jsonBody } from "./api";
+import { api, jsonBody, setUnauthorizedHandler } from "./api";
 
 interface AuthContextValue {
   authenticated: boolean | null;
@@ -22,6 +22,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api("/api/auth/me")
       .then(() => setAuthenticated(true))
       .catch(() => setAuthenticated(false));
+  }, []);
+  useEffect(() => {
+    // Any 401 from a poller/tab means the session expired: flip to the login
+    // screen instead of leaving the SPA rendering "Session expired" errors.
+    setUnauthorizedHandler(() => setAuthenticated(false));
+    return () => setUnauthorizedHandler(null);
   }, []);
   const value = useMemo<AuthContextValue>(
     () => ({

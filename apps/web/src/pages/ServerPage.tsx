@@ -50,6 +50,11 @@ export function ServerPage() {
   const [server, setServer] = useState<ServerSummary | null>(null);
   const [marketplaceEnabled, setMarketplaceEnabled] = useState(true);
   const [error, setError] = useState("");
+  // Switching servers must not keep showing the previous server's summary.
+  useEffect(() => {
+    setServer(null);
+    setError("");
+  }, [id]);
   useEffect(() => {
     let cancelled = false;
     void api<{ modrinthEnabled?: boolean }>("/api/metadata")
@@ -64,13 +69,22 @@ export function ServerPage() {
   }, []);
 
   const load = useCallback(async () => {
+    // Fast server switching re-renders this component with a new id; drop
+    // responses that arrive after the switch so we never render or control
+    // the wrong server.
+    let cancelled = false;
     try {
-      setServer(await api<ServerSummary>(`/api/servers/${id}`));
+      const summary = await api<ServerSummary>(`/api/servers/${id}`);
+      if (cancelled) return;
+      setServer(summary);
       setError("");
     } catch (error) {
+      if (cancelled) return;
       setError(
         error instanceof Error ? error.message : "Unable to load server",
       );
+    } finally {
+      cancelled = true;
     }
   }, [id]);
 

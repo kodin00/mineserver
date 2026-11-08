@@ -15,6 +15,14 @@ export class ApiError extends Error {
   }
 }
 
+type UnauthorizedHandler = () => void;
+let onUnauthorized: UnauthorizedHandler | null = null;
+
+/** Registers the callback fired whenever an API response is 401 (session expired). */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null) {
+  onUnauthorized = handler;
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {},
@@ -37,6 +45,8 @@ export async function api<T>(
     const body = await response
       .json()
       .catch(() => ({ error: response.statusText }));
+    if (response.status === 401 && !path.startsWith("/api/auth/"))
+      onUnauthorized?.();
     throw new ApiError(body.error ?? response.statusText, response.status);
   }
   if (response.status === 204) return undefined as T;

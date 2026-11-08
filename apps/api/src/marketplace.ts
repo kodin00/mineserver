@@ -39,7 +39,7 @@ import {
   listDatapacks,
   resolveLevelName,
 } from "./datapacks.js";
-import { pathExists, resolveWithin } from "./utils.js";
+import { pathExists, resolveWithin, safeFilename } from "./utils.js";
 
 function httpError(message: string, statusCode: number) {
   return Object.assign(new Error(message), { statusCode });
@@ -770,7 +770,12 @@ export async function runUpdate(
   const temp = await createTempUpload(config.tempRoot);
   const backup = `${current.path}.update-backup-${crypto.randomUUID()}`;
   const directory = path.dirname(current.path);
-  const destinationBase = path.join(directory, file.filename);
+  // Upstream-controlled name: validate before it becomes a path segment, so a
+  // hostile version filename can't traverse out of the install directory.
+  const destinationBase = path.join(
+    directory,
+    safeFilename(path.basename(file.filename)),
+  );
   const destination =
     source.target === "addons" && current.enabled === false
       ? `${destinationBase}.disabled`

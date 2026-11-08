@@ -126,6 +126,10 @@ export const LoginSchema = z.object({
   password: z.string().min(1).max(512),
 });
 
+export const AddonToggleSchema = z.object({
+  enabled: z.boolean(),
+});
+
 export const ChangePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(512),
   newPassword: z.string().min(12).max(512),

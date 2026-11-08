@@ -76,25 +76,30 @@ export function FilesTab({ server }: { server: ServerSummary }) {
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const latestFolderRequest = useRef(0);
   const dirty = openDocument !== null && draft !== openDocument.content;
 
   const loadFolder = useCallback(
     async (path: string) => {
+      // Rapid folder navigation: only the most recently requested folder may
+      // paint, regardless of response order.
+      const request = ++latestFolderRequest.current;
       setLoading(true);
       try {
-        setEntries(
-          await api<ServerFileEntry[]>(
-            `/api/servers/${server.id}/files?${queryPath(path)}`,
-          ),
+        const found = await api<ServerFileEntry[]>(
+          `/api/servers/${server.id}/files?${queryPath(path)}`,
         );
+        if (request !== latestFolderRequest.current) return;
+        setEntries(found);
         setCurrentPath(path);
         setError("");
       } catch (caught) {
+        if (request !== latestFolderRequest.current) return;
         setError(
           caught instanceof Error ? caught.message : "Unable to load files",
         );
       } finally {
-        setLoading(false);
+        if (request === latestFolderRequest.current) setLoading(false);
       }
     },
     [server.id],
