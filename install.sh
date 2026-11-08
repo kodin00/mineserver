@@ -16,11 +16,11 @@ docker compose version >/dev/null 2>&1 || {
   exit 1
 }
 
-mkdir mineserver
+mkdir -p mineserver
 cd mineserver
 curl -fsSLo compose.yaml "$repo_url/compose.yaml"
 curl -fsSLo .env.example "$repo_url/.env.example"
-cp .env.example .env
+[ -f .env ] || cp .env.example .env
 
 # Replace the publicly documented example password with a generated one unless
 # the user already provided their own before running the installer.
@@ -32,6 +32,8 @@ if grep -q '^ADMIN_PASSWORD=mineserver123!' .env; then
   echo "Sign in with it, or change it later in the panel after first login."
 fi
 
-sudo mkdir -p /opt/mineserver
+data_root="$(grep '^MINESERVER_DATA_ROOT=' .env | cut -d= -f2- || true)"
+: "${data_root:=/opt/mineserver}"
+sudo mkdir -p "$data_root"
 docker compose pull
 docker compose up -d

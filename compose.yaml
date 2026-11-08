@@ -1,10 +1,15 @@
 services:
   api:
-    image: ghcr.io/kodin00/mineserver-api:latest
+    image: ghcr.io/kodin00/mineserver-api:${MINESERVER_TAG:-latest}
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
@@ -34,6 +39,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${MINESERVER_DATA_ROOT:-/opt/mineserver}:${MINESERVER_DATA_ROOT:-/opt/mineserver}
+    mem_limit: 1g
     healthcheck:
       test:
         [
@@ -47,7 +53,7 @@ services:
       retries: 5
 
   web:
-    image: ghcr.io/kodin00/mineserver-web:latest
+    image: ghcr.io/kodin00/mineserver-web:${MINESERVER_TAG:-latest}
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -56,4 +62,9 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "${PANEL_PORT:-8080}:8080"
+      # Loopback by default: the panel speaks plain HTTP and controls Docker.
+      # Deliberate LAN/remote exposure: set PANEL_BIND=0.0.0.0 in .env (and
+      # put HTTPS in front first).
+      - "${PANEL_BIND:-127.0.0.1}:${PANEL_PORT:-8080}:8080"
+    logging: *logging
+    mem_limit: 256m

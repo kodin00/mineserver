@@ -14,11 +14,15 @@ if (
   throw new Error("Set a strong ADMIN_PASSWORD before starting in production");
 }
 
-const app = await buildApp(await createContext());
+const { app, jobs } = await buildApp(await createContext());
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "Shutting down");
   await app.close();
+  // Let in-flight operations (backup restore, world import, actions) finish
+  // their filesystem swaps before exiting; capped so a wedged task can't
+  // block shutdown forever.
+  await jobs.drain(30_000);
   process.exit(0);
 };
 process.on("SIGTERM", () => void shutdown("SIGTERM"));

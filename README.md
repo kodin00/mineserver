@@ -33,7 +33,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Open `http://your-server-ip:8080` and sign in with the password from `.env`.
+Open `http://localhost:8080` on the server (or `http://your-server-ip:8080` after setting `PANEL_BIND=0.0.0.0` in `.env`) and sign in with the password from `.env`.
 
 ### Install from source
 
@@ -54,7 +54,7 @@ Open `http://your-server-ip:8080` and sign in with the password from `.env`.
    docker compose up -d --build
    ```
 
-4. Open `http://your-server-ip:8080` and sign in with the password from `.env`.
+4. Open `http://localhost:8080` on the server (or `http://your-server-ip:8080` after setting `PANEL_BIND=0.0.0.0` in `.env`) and sign in with the password from `.env`.
 
 5. Create a Minecraft server in the panel, choose its type and version, then start it.
 
@@ -63,6 +63,9 @@ Your server worlds, backups, and settings are saved in `/opt/mineserver` by defa
 ## Before sharing it online
 
 This panel can control Docker on its host. Keep it on a trusted network whenever possible.
+
+By default the panel binds to `127.0.0.1`, so it is only reachable from the
+machine it runs on. To open it to your LAN, set `PANEL_BIND=0.0.0.0` in `.env`.
 
 For remote access, put it behind an HTTPS reverse proxy, set `COOKIE_SECURE=true` in `.env`, and protect it with a firewall or VPN. Do not expose the API service or Minecraft RCON ports directly.
 

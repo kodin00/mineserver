@@ -127,9 +127,10 @@ describe("schema upgrade from an existing panel database", () => {
 
     // Opening it with the current Store must migrate in place.
     const store = new Store(file);
-    expect(store.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: 5,
-    });
+    const migrated = store.db.prepare("PRAGMA user_version").get() as {
+      user_version: number;
+    };
+    expect(migrated.user_version).toBeGreaterThanOrEqual(6);
 
     // The pre-existing row survived, revision counters intact.
     expect(store.getServer("legacy-1")).toMatchObject({

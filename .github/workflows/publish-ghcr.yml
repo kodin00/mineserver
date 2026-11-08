@@ -8,8 +8,37 @@ on:
 env:
   REGISTRY: ghcr.io
 
+concurrency:
+  group: publish-ghcr
+  cancel-in-progress: false
+
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Validate compose file
+        run: docker compose config
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -22,7 +51,11 @@ jobs:
           - name: web
             dockerfile: apps/web/Dockerfile
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -37,6 +70,8 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.name }}:latest
             ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.name }}:${{ github.sha }}

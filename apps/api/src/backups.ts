@@ -5,6 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { ZipArchive } from "archiver";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 import type { BackupFile, BackupSettings } from "@mineserver/shared";
+import { config } from "./config.js";
 import type { InstancePaths } from "./compose.js";
 import type { ComposeManager } from "./docker.js";
 import { pathExists, runCommand, safeFilename } from "./utils.js";
@@ -61,6 +62,8 @@ function safeZipEntry(name: string): string {
 
 async function extractZip(filename: string, destination: string) {
   const zip = await openZip(filename);
+  let fileCount = 0;
+  let expandedBytes = 0;
   try {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -94,6 +97,14 @@ async function extractZip(filename: string, destination: string) {
           if (entry.fileName.endsWith("/")) {
             await mkdir(target, { recursive: true });
           } else {
+            fileCount += 1;
+            expandedBytes += entry.uncompressedSize;
+            if (fileCount > config.MAX_ZIP_FILES) {
+              throw new Error("Backup contains too many files");
+            }
+            if (expandedBytes > config.MAX_ZIP_EXPANDED_BYTES) {
+              throw new Error("Backup expands beyond the configured limit");
+            }
             await mkdir(path.dirname(target), { recursive: true });
             const stream = await entryStream(zip, entry);
             await pipeline(
@@ -244,8 +255,26 @@ export async function restoreBackup(
       );
     }
     await docker.down(id, paths).catch(() => undefined);
-    await rename(paths.data, rollback);
-    await rename(staging, paths.data);
+    // Flag-based swap with rollback (same pattern as world import): if either
+    // rename fails mid-swap, put the original data directory back so a failed
+    // restore can never leave the server without a data directory.
+    let movedCurrent = false;
+    let installed = false;
+    try {
+      await rename(paths.data, rollback);
+      movedCurrent = true;
+      await rename(staging, paths.data);
+      installed = true;
+    } catch (swapError) {
+      if (installed) {
+        await rm(paths.data, { recursive: true, force: true });
+        installed = false;
+      }
+      if (movedCurrent && !(await pathExists(paths.data))) {
+        await rename(rollback, paths.data).catch(() => undefined);
+      }
+      throw swapError;
+    }
     try {
       await docker.up(id, paths);
       const deadline = Date.now() + 180_000;

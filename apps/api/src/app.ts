@@ -3,7 +3,11 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
-import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
@@ -96,7 +100,7 @@ import { createWorldExport, importWorld, worldInfo } from "./worlds.js";
 const SESSION_COOKIE = "ms_session";
 const CSRF_COOKIE = "ms_csrf";
 
-interface AppContext {
+export interface AppContext {
   store: Store;
   docker: ComposeManager;
   jobs: JobRunner;
@@ -203,7 +207,9 @@ async function fetchMetadata() {
   };
 }
 
-export async function buildApp(context: AppContext) {
+export async function buildApp(
+  context: AppContext,
+): Promise<{ app: FastifyInstance; jobs: JobRunner }> {
   const { store, docker, jobs, modrinth } = context;
   const app = Fastify({
     trustProxy: config.TRUST_PROXY_HOPS > 0 ? config.TRUST_PROXY_HOPS : false,
@@ -1564,7 +1570,7 @@ export async function buildApp(context: AppContext) {
     },
   );
 
-  return app;
+  return { app, jobs };
 }
 
 export async function createContext(): Promise<AppContext> {

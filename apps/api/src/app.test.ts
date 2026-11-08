@@ -75,7 +75,7 @@ async function fixture(
     new Date(Date.now() + 60_000).toISOString(),
   );
   const jobs = new JobRunner(store);
-  const app = await buildApp({ store, docker, jobs, modrinth });
+  const app = (await buildApp({ store, docker, jobs, modrinth })).app;
   return { app, store, jobs, serverId, sessionToken, csrfToken };
 }
 
@@ -263,12 +263,14 @@ describe("world routes", () => {
       new Date(Date.now() + 60_000).toISOString(),
     );
     const jobs = new JobRunner(store);
-    const app = await buildApp({
-      store,
-      docker,
-      jobs,
-      modrinth: {} as ModrinthApi,
-    });
+    const app = (
+      await buildApp({
+        store,
+        docker,
+        jobs,
+        modrinth: {} as ModrinthApi,
+      })
+    ).app;
     const lease = jobs.mutations.acquire(serverId, "world-import");
     try {
       const response = await app.inject({

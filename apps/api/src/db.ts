@@ -38,6 +38,11 @@ export interface AddonSourceRow {
   installed_at: string;
 }
 
+function isUniquePortViolation(error: unknown): boolean {
+  if (!(error instanceof Error) || !("code" in error)) return false;
+  return error.code === "SQLITE_CONSTRAINT_UNIQUE";
+}
+
 export class Store {
   readonly db: DatabaseSync;
 
@@ -148,6 +153,24 @@ export class Store {
           CREATE UNIQUE INDEX IF NOT EXISTS idx_addon_sources_project
             ON addon_sources(server_id,provider,target,project_id,COALESCE(level_name,''));
           PRAGMA user_version=5;
+          COMMIT;
+        `);
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    }
+    if (version < 6) {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        // Port uniqueness is enforced by the database so concurrent
+        // create/update requests can never both win the check-then-insert.
+        // Existing duplicates must be resolved by hand first; the index
+        // creation fails loudly instead of silently picking a winner.
+        this.db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_port
+            ON servers(CAST(json_extract(config_json, '$.port') AS INTEGER));
+          PRAGMA user_version=6;
           COMMIT;
         `);
       } catch (error) {
@@ -436,21 +459,41 @@ export class Store {
   insertServer(id: string, slug: string, config: ServerConfig) {
     const now = new Date().toISOString();
     const serialized = JSON.stringify(config);
-    this.db
-      .prepare(
-        `INSERT INTO servers
-          (id,slug,config_json,applied_config_json,revision,applied_revision,created_at,updated_at)
-         VALUES(?,?,?,?,1,0,?,?)`,
-      )
-      .run(id, slug, serialized, serialized, now, now);
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO servers
+            (id,slug,config_json,applied_config_json,revision,applied_revision,created_at,updated_at)
+           VALUES(?,?,?,?,1,0,?,?)`,
+        )
+        .run(id, slug, serialized, serialized, now, now);
+    } catch (error: unknown) {
+      if (isUniquePortViolation(error)) {
+        throw Object.assign(
+          new Error(`Port ${config.port} is already assigned`),
+          { statusCode: 409 },
+        );
+      }
+      throw error;
+    }
   }
 
   updateServer(id: string, config: ServerConfig) {
-    this.db
-      .prepare(
-        "UPDATE servers SET config_json=?, revision=revision+1, updated_at=? WHERE id=?",
-      )
-      .run(JSON.stringify(config), new Date().toISOString(), id);
+    try {
+      this.db
+        .prepare(
+          "UPDATE servers SET config_json=?, revision=revision+1, updated_at=? WHERE id=?",
+        )
+        .run(JSON.stringify(config), new Date().toISOString(), id);
+    } catch (error: unknown) {
+      if (isUniquePortViolation(error)) {
+        throw Object.assign(
+          new Error(`Port ${config.port} is already assigned`),
+          { statusCode: 409 },
+        );
+      }
+      throw error;
+    }
   }
 
   touchServerRevision(id: string) {

@@ -60,9 +60,29 @@ export class ServerMutationCoordinator {
 
 export class JobRunner extends EventEmitter {
   readonly mutations = new ServerMutationCoordinator();
+  private inFlight = 0;
 
   constructor(private readonly store: Store) {
     super();
+  }
+
+  /**
+   * Resolves when no operation is executing. Used by graceful shutdown so a
+   * SIGTERM during a backup restore cannot land inside the rename window.
+   */
+  async drain(maxWaitMs: number): Promise<void> {
+    if (this.inFlight === 0) return;
+    let resolveIdle: () => void = () => undefined;
+    const idle = new Promise<void>((resolve) => {
+      resolveIdle = resolve;
+    });
+    const cap = new Promise<void>((resolve) =>
+      setTimeout(resolve, maxWaitMs).unref(),
+    );
+    // Attach immediately so a late resolve can't surface as a rejection-free
+    // dangling promise warning.
+    void idle.catch(() => undefined);
+    return Promise.race([idle, cap]).finally(() => resolveIdle());
   }
 
   run(
@@ -115,6 +135,18 @@ export class JobRunner extends EventEmitter {
   }
 
   private async execute(operation: Operation, task: () => Promise<unknown>) {
+    this.inFlight += 1;
+    try {
+      await this.runOperation(operation, task);
+    } finally {
+      this.inFlight -= 1;
+    }
+  }
+
+  private async runOperation(
+    operation: Operation,
+    task: () => Promise<unknown>,
+  ) {
     this.store.updateOperation(operation.id, "running", null);
     this.emit("operation", {
       ...operation,
