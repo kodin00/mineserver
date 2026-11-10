@@ -1,77 +1,49 @@
 # Mineserver Panel
 
-Run and manage multiple Minecraft Java servers from one simple web panel. Create servers, view logs, run console commands, install mods or plugins, and make backups—all from your browser.
+Run and manage multiple Minecraft Java servers from one web panel. Create servers, view logs, run console commands, install mods or plugins, and make backups—all from your browser.
 
 ## Quick start
 
-You need a Linux machine with [Docker Engine](https://docs.docker.com/engine/install/), Docker Compose v2, and `curl` installed.
-
-### One-line GHCR install
+Requires a Linux machine with [Docker Engine](https://docs.docker.com/engine/install/), Docker Compose v2, and `curl`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/kodin00/mineserver/master/install.sh | sh
 ```
 
-This creates a `mineserver` folder, downloads the Compose files, creates `/opt/mineserver`, then pulls and starts the GHCR images. The default password is `mineserver123!`; set `ADMIN_PASSWORD` in `mineserver/.env` before the first start if you want a different password.
+This creates a `mineserver` folder, pulls the images from GHCR, and starts the panel. Sign in at `http://localhost:8080` with the default password `mineserver123!`. To use a different password, set `ADMIN_PASSWORD` in `mineserver/.env` before the first start.
 
-### Install from GHCR
+Worlds, backups, and panel data are saved in `/opt/mineserver`, so they survive container restarts and updates.
 
-This uses the published images, so Docker does not need to build the project locally:
+### Without the install script
+
+Uses the same published GHCR images, no local build needed:
 
 ```sh
 mkdir mineserver && cd mineserver
 curl -fsSLO https://raw.githubusercontent.com/kodin00/mineserver/master/compose.yaml
 curl -fsSLO https://raw.githubusercontent.com/kodin00/mineserver/master/.env.example
 cp .env.example .env
-```
-
-The default password is `mineserver123!`. To use a different password, set `ADMIN_PASSWORD` in `.env` before the first start, then start the panel:
-
-```sh
 sudo mkdir -p /opt/mineserver
 docker compose pull
 docker compose up -d
 ```
 
-Open `http://localhost:8080` on the server (or `http://your-server-ip:8080` after setting `PANEL_BIND=0.0.0.0` in `.env`) and sign in with the password from `.env`.
+### From source
 
-### Install from source
+```sh
+cp .env.example .env
+docker compose up -d --build
+```
 
-1. Download or clone this project onto the machine that will run your Minecraft servers.
-2. Create your settings file and choose a strong password:
+To reach the panel from another machine, set `PANEL_BIND=0.0.0.0` in `.env` and use `http://your-server-ip:8080`.
 
-   ```sh
-   cp .env.example .env
-   ```
+## Security notes
 
-   The default password is `mineserver123!`. To use a different password, set
-   `ADMIN_PASSWORD` in `.env` before the first start.
-
-3. Start the panel:
-
-   ```sh
-   sudo mkdir -p /opt/mineserver
-   docker compose up -d --build
-   ```
-
-4. Open `http://localhost:8080` on the server (or `http://your-server-ip:8080` after setting `PANEL_BIND=0.0.0.0` in `.env`) and sign in with the password from `.env`.
-
-5. Create a Minecraft server in the panel, choose its type and version, then start it.
-
-Your server worlds, backups, and settings are saved in `/opt/mineserver` by default, so they survive container updates and restarts.
-
-## Before sharing it online
-
-This panel can control Docker on its host. Keep it on a trusted network whenever possible.
-
-By default the panel binds to `127.0.0.1`, so it is only reachable from the
-machine it runs on. To open it to your LAN, set `PANEL_BIND=0.0.0.0` in `.env`.
-
-For remote access, put it behind an HTTPS reverse proxy, set `COOKIE_SECURE=true` in `.env`, and protect it with a firewall or VPN. Do not expose the API service or Minecraft RCON ports directly.
+This panel can control Docker on its host. Keep it on a trusted network. It binds to `127.0.0.1` by default; set `PANEL_BIND=0.0.0.0` to open it to your LAN. For remote access, put it behind an HTTPS reverse proxy, set `COOKIE_SECURE=true`, and use a firewall or VPN. Do not expose the API service or Minecraft RCON ports directly.
 
 ## Common settings
 
-Edit `.env` before starting the panel to change these values:
+Edit `.env` before starting the panel. After changing settings, restart with `docker compose up -d`.
 
 | Setting                | Default           | What it changes                                   |
 | ---------------------- | ----------------- | ------------------------------------------------- |
@@ -81,102 +53,55 @@ Edit `.env` before starting the panel to change these values:
 | `TZ`                   | `Asia/Jakarta`    | Time zone used for scheduled backups.             |
 | `COOKIE_SECURE`        | `false`           | Set to `true` when using HTTPS.                   |
 
-After changing settings, restart the panel:
-
-```sh
-docker compose up -d
-```
-
-Changing `ADMIN_PASSWORD` after the first login does not change the existing password. It is stored securely in the panel database.
+Changing `ADMIN_PASSWORD` after the first login has no effect—the password is stored in the panel database.
 
 ## What you can do in the panel
 
 - Run Vanilla, Paper, Fabric, Forge, or NeoForge servers
-- Sleep empty servers after a configurable delay and wake them when a player joins
 - Start, stop, and restart servers; view live logs; send console commands
+- Sleep empty servers after a configurable delay and wake them when a player joins
 - Browse Modrinth from inside the panel and install mods, plugins, or datapacks in one click
-- Upload Paper plugins or mod-loader mods as JAR files or ZIP archives
+- Upload plugins or mods as JAR files or ZIP archives
 - Browse and safely edit server configuration files
 - Create, download, schedule, restore, and retain ZIP backups
 - Create one-time download links for installed add-ons
 
 ## Wake on join
 
-Enable **Sleep when nobody is playing and wake on join** in a server's
-settings, choose the empty-server timeout, then apply the pending change. The
-panel puts a small Minecraft-aware proxy on that server's host port and keeps
-the full game container off while it is empty. A player can use the same
-address as before; their first connection starts the game container.
-
-The proxy needs access to the Docker socket to start and gracefully stop its
-managed game container. Keep the host port limited to the networks or players
-that should be able to wake the server. The initial connection may show a
-starting message or require one retry while Minecraft finishes booting.
+Enable **Sleep when nobody is playing and wake on join** in a server's settings. The panel puts a small Minecraft-aware proxy on that server's port and keeps the game container off while it is empty; a player joining with the same address as before starts it. The first connection may show a starting message or need one retry while the server boots.
 
 ## Mod marketplace
 
-The **Browse** tab on a server searches [Modrinth](https://modrinth.com) filtered
-to that server's loader and Minecraft version, then downloads and verifies the
-file for you. Mods, plugins, and datapacks install directly. Resource packs and
-shaders are listed for reference only, because a Minecraft server has nowhere to
-install them.
-
-No account or API key is needed. The panel needs outbound HTTPS access to
-`api.modrinth.com` and `cdn.modrinth.com`.
-
-Everything optional is configured in the panel under **Settings**, not in
-`.env`:
-
-- **Enable the marketplace.** Turn it off for an air-gapped install and the
-  panel will not contact Modrinth at all. The Browse tab disappears.
-- **Contact details.** Sent in the User-Agent. Modrinth asks for this so they
-  can reach you about API usage instead of silently blocking the panel.
-- **Access token.** Only needed to reach projects that are private to your own
-  Modrinth account. It does **not** raise the rate limit, so leave it blank
-  unless you know you need it. The panel checks the token when you save it and
-  tells you whether Modrinth accepted it. The token is never shown again after
-  saving and is never sent to the file CDN.
-
-`MODRINTH_ENABLED` in `.env` only seeds the initial value on first run; after
-that the Settings page is authoritative. The remaining `MODRINTH_*` variables
-are deployment tuning (timeouts, request budget, size cap) and stay in `.env`.
-
-Modrinth allows 300 API requests per minute per IP address, shared by everyone
-using the panel. The panel keeps itself well under that, caches responses, and
-backs off on its own if Modrinth reports the budget is spent.
-
-Installed files land in the same place as uploaded ones, so a server restart is
-still required before they load. Datapacks additionally need `/reload` and
-`/datapack enable`, or a restart, before they take effect.
+The **Browse** tab on a server searches [Modrinth](https://modrinth.com), filtered to that server's loader and Minecraft version, and installs mods, plugins, and datapacks with verification. No account or API key is needed; the panel only needs outbound HTTPS to `api.modrinth.com` and `cdn.modrinth.com`. Everything optional (enable/disable, contact details, private-project token) is configured in the panel under **Settings**, not in `.env`. A server restart is required after installing files; datapacks also need `/reload` or a restart.
 
 ## Updating
 
-For a GHCR installation, pull the latest images and restart:
+GHCR installation:
 
 ```sh
 docker compose pull
 docker compose up -d
 ```
 
-For a source installation, pull the new version and rebuild:
+Source installation:
 
 ```sh
 git pull
 docker compose up -d --build
 ```
 
-Existing Minecraft data is kept in `MINESERVER_DATA_ROOT`. After an upgrade, open the panel and apply or restart each existing server once if it is marked as awaiting apply.
+After an upgrade, open the panel and apply or restart each existing server once if it is marked as awaiting apply.
 
 ## Local development
 
-Node.js 22 or newer is required.
+Requires Node.js 22 or newer.
 
 ```sh
 npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. To use Docker server management during development on a Linux Docker host:
+Open `http://localhost:5173`. For Docker server management during development on a Linux Docker host:
 
 ```sh
 DATA_ROOT="$PWD/runtime" ADMIN_PASSWORD="a-long-development-password" npm run dev
