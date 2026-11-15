@@ -39,6 +39,9 @@ jobs:
           ADMIN_PASSWORD: ci-validation-only
         run: docker compose config
 
+      - name: Smoke test fresh installation
+        run: scripts/smoke-container.sh
+
   publish:
     needs: test
     runs-on: ubuntu-latest
