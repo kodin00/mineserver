@@ -8,7 +8,7 @@ import { ServerPage } from "./pages/ServerPage";
 import { AccountPage } from "./pages/AccountPage";
 
 function ProtectedRoutes() {
-  const { authenticated } = useAuth();
+  const { authenticated, role } = useAuth();
   if (authenticated === null) {
     return (
       <div className="screen-center">
@@ -20,9 +20,23 @@ function ProtectedRoutes() {
   return (
     <Routes>
       <Route path="/" element={<DashboardPage />} />
-      <Route path="/servers/new" element={<CreateServerPage />} />
+      <Route
+        path="/servers/new"
+        element={
+          role === "admin" && import.meta.env.VITE_DEMO !== "true" ? (
+            <CreateServerPage />
+          ) : (
+            <Navigate to="/" replace />
+          )
+        }
+      />
       <Route path="/servers/:id" element={<ServerPage />} />
-      <Route path="/account" element={<AccountPage />} />
+      <Route
+        path="/account"
+        element={
+          role === "admin" ? <AccountPage /> : <Navigate to="/" replace />
+        }
+      />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

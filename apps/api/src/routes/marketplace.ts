@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import {
   MarketplaceSettingsSchema,
   ModrinthInstallSchema,
@@ -168,6 +169,168 @@ export async function marketplaceRoutes(
       paths: instancePaths(config.instancesRoot, row.id),
     };
   }
+
+  async function verifyRequestedVersion(
+    row: ServerRow,
+    item: {
+      projectId: string;
+      versionId: string;
+      projectType: "mod" | "plugin" | "datapack";
+    },
+  ) {
+    const server = rowConfig(row);
+    const versions = await modrinth.listVersions({
+      idOrSlug: item.projectId,
+      serverType: server.type,
+      gameVersion: server.version,
+      projectType: item.projectType,
+    });
+    if (
+      !versions.some(
+        (version) =>
+          version.id === item.versionId && version.projectId === item.projectId,
+      )
+    )
+      throw new Error("Selected version is not compatible with this server");
+  }
+
+  const requestItem = z.object({
+    projectId: z.string().regex(/^[A-Za-z0-9]{8}$/),
+    versionId: z.string().regex(/^[A-Za-z0-9]{8}$/),
+    projectType: z.enum(["mod", "plugin", "datapack"]),
+  });
+  type RequestParams = { id: string; requestId: string };
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/mod-requests",
+    async (request) => {
+      requireServer(store, request.params.id);
+      return { requests: store.listModRequests(request.params.id) };
+    },
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/mod-requests",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const row = requireServer(store, request.params.id);
+      assertMarketplaceEnabled();
+      const body = z
+        .object({ items: z.array(requestItem).min(1).max(20) })
+        .parse(request.body);
+      if (
+        new Set(body.items.map((item) => item.projectId)).size !==
+        body.items.length
+      )
+        throw new Error("Each project may only appear once");
+      const items = [];
+      for (const item of body.items) {
+        assertInstallable(rowConfig(row), item.projectType);
+        await verifyRequestedVersion(row, item);
+        const preview = await buildPreview(marketplaceContext(row), item);
+        if (preview.primary.projectId !== item.projectId)
+          throw new Error(
+            "Selected version does not belong to the requested project",
+          );
+        items.push({
+          ...item,
+          title: preview.primary.projectTitle,
+          versionNumber: preview.primary.versionNumber,
+        });
+      }
+      return reply.code(201).send(store.createModRequest(row.id, items));
+    },
+  );
+  app.post<{ Params: RequestParams }>(
+    "/api/servers/:id/mod-requests/:requestId/decline",
+    async (request) => {
+      requireServer(store, request.params.id);
+      if (!store.getModRequest(request.params.id, request.params.requestId))
+        throw Object.assign(new Error("Request not found"), {
+          statusCode: 404,
+        });
+      if (
+        !store.transitionModRequest(
+          request.params.id,
+          request.params.requestId,
+          "pending",
+          "declined",
+        )
+      )
+        throw Object.assign(new Error("Request is no longer pending"), {
+          statusCode: 409,
+        });
+      return store.getModRequest(request.params.id, request.params.requestId);
+    },
+  );
+  app.post<{ Params: RequestParams }>(
+    "/api/servers/:id/mod-requests/:requestId/approve",
+    async (request, reply) => {
+      const row = requireServer(store, request.params.id);
+      assertMarketplaceEnabled();
+      const entry = store.getModRequest(row.id, request.params.requestId);
+      if (!entry)
+        throw Object.assign(new Error("Request not found"), {
+          statusCode: 404,
+        });
+      jobs.mutations.assertAvailable(row.id);
+      if (
+        !store.transitionModRequest(row.id, entry.id, "pending", "installing")
+      )
+        throw Object.assign(new Error("Request is no longer pending"), {
+          statusCode: 409,
+        });
+      try {
+        jobs.runExclusive(row.id, "mod-request-install", async () => {
+          let completed = 0;
+          try {
+            const items = z
+              .array(requestItem)
+              .min(1)
+              .max(20)
+              .parse(entry.items);
+            const ctx = marketplaceContext(requireServer(store, row.id));
+            // Resolve every selection before writing anything; do not trust project IDs supplied by a player.
+            for (const item of items) {
+              assertInstallable(ctx.serverConfig, item.projectType);
+              await verifyRequestedVersion(requireServer(store, row.id), item);
+              const preview = await buildPreview(ctx, item);
+              if (preview.primary.projectId !== item.projectId)
+                throw new Error(
+                  "Selected version does not belong to the requested project",
+                );
+            }
+            for (const item of items) {
+              await runInstall(ctx, {
+                ...item,
+                includeRequiredDependencies: true,
+              });
+              completed++;
+            }
+            store.transitionModRequest(
+              row.id,
+              entry.id,
+              "installing",
+              "approved",
+            );
+          } catch (error) {
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            store.transitionModRequest(
+              row.id,
+              entry.id,
+              "installing",
+              "failed",
+              `${completed} of ${entry.items.length} requested projects installed. ${detail}`,
+            );
+            throw error;
+          }
+        });
+      } catch (error) {
+        store.transitionModRequest(row.id, entry.id, "installing", "pending");
+        throw error;
+      }
+      return reply.code(202).send(store.getModRequest(row.id, entry.id));
+    },
+  );
 
   // Datapacks live under the world directory, not in addons/, so the add-ons
   // listing cannot see them. Without this the UI has no way to know a datapack

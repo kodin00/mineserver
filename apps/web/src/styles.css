@@ -2167,3 +2167,46 @@ label small {
     gap: 10px;
   }
 }
+
+.address-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.address-panel p {
+  margin-bottom: 0;
+}
+.request-card {
+  padding: 1rem 0;
+  border-top: 1px solid var(--border, #ddd);
+}
+.request-card-heading,
+.request-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.request-card-heading strong {
+  text-transform: capitalize;
+}
+.request-selection h2 {
+  margin-top: 0;
+}
+.request-selection > .button {
+  margin-top: 1rem;
+}
+
+.role-label {
+  font-size: 0.8rem;
+  color: var(--text-muted, #777);
+}
+.demo-banner {
+  text-align: center;
+  padding: 0.55rem 1rem;
+  background: #e8f3ff;
+  color: #204a72;
+  font-size: 0.85rem;
+}

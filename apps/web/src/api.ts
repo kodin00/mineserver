@@ -1,3 +1,5 @@
+import { demoFetch } from "./demo";
+
 function csrfToken(): string | null {
   const value = document.cookie
     .split("; ")
@@ -35,12 +37,16 @@ export async function api<T>(
     const token = csrfToken();
     if (token) headers.set("x-csrf-token", token);
   }
-  const response = await fetch(path, {
+  const request = {
     ...options,
     method,
     headers,
-    credentials: "same-origin",
-  });
+    credentials: "same-origin" as const,
+  };
+  const response =
+    import.meta.env.VITE_DEMO === "true"
+      ? await demoFetch(path, request)
+      : await fetch(path, request);
   if (!response.ok) {
     const body = await response
       .json()

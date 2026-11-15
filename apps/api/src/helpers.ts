@@ -71,7 +71,11 @@ export async function authenticate(
     if (session) store.deleteSession(tokenHash);
     return reply.code(401).send({ error: "Session expired" });
   }
-  request.session = { hash: tokenHash, csrf: session.csrf_token };
+  request.session = {
+    hash: tokenHash,
+    csrf: session.csrf_token,
+    role: session.role,
+  };
 }
 
 export function errorMessage(error: unknown): string {

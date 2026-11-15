@@ -33,8 +33,34 @@ export async function serversRoutes(
 ): Promise<void> {
   const { store, docker, jobs } = context;
 
-  app.get("/api/servers", async () =>
-    Promise.all(store.listServers().map((row) => serverSummary(row, docker))),
+  const summary = async (
+    row: Parameters<typeof serverSummary>[0],
+    player: boolean,
+  ) => {
+    const value = await serverSummary(row, docker);
+    if (!player) return value;
+    const c = value.config;
+    return {
+      ...value,
+      config: ServerConfigSchema.parse({
+        name: c.name,
+        publicAddress: c.publicAddress,
+        version: c.version,
+        type: c.type,
+        port: c.port,
+        serverIconUrl: c.serverIconUrl,
+        maxPlayers: c.maxPlayers,
+        motd: c.motd,
+      }),
+      runtimeError: undefined,
+    };
+  };
+  app.get("/api/servers", async (request) =>
+    Promise.all(
+      store
+        .listServers()
+        .map((row) => summary(row, request.session?.role === "player")),
+    ),
   );
 
   app.post("/api/servers", async (request, reply) => {
@@ -67,7 +93,7 @@ export async function serversRoutes(
 
   app.get<{ Params: { id: string } }>("/api/servers/:id", async (request) => {
     const row = requireServer(store, request.params.id);
-    return serverSummary(row, docker);
+    return summary(row, request.session?.role === "player");
   });
 
   app.put<{ Params: { id: string } }>("/api/servers/:id", async (request) => {
@@ -85,6 +111,13 @@ export async function serversRoutes(
       row.id,
       "server-config-update",
       async () => {
+        const current = rowConfig(row);
+        const { publicAddress: _oldAddress, ...oldSettings } = current;
+        const { publicAddress: _newAddress, ...newSettings } = serverConfig;
+        if (JSON.stringify(oldSettings) === JSON.stringify(newSettings)) {
+          store.updatePublicAddress(row.id, serverConfig.publicAddress);
+          return serverSummary(store.getServer(row.id)!, docker);
+        }
         store.updateServer(row.id, serverConfig);
         await writeCompose(
           row.id,

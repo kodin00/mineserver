@@ -5,8 +5,10 @@ import { useAuth } from "../auth";
 import { ErrorBanner } from "../components/Layout";
 
 export function LoginPage() {
+  const demo = import.meta.env.VITE_DEMO === "true";
   const auth = useAuth();
   const navigate = useNavigate();
+  const [role, setRole] = useState<"admin" | "player">("admin");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -17,7 +19,7 @@ export function LoginPage() {
     setLoading(true);
     setError("");
     try {
-      await auth.login(password);
+      await auth.login(demo ? "demo" : password, role);
       navigate("/");
     } catch (error) {
       setError(error instanceof Error ? error.message : "Unable to sign in");
@@ -38,34 +40,57 @@ export function LoginPage() {
         </div>
         <div>
           <h1>Welcome back</h1>
-          <p>Sign in to manage your Minecraft worlds.</p>
+          <p>
+            {demo
+              ? "Explore sample servers as an administrator or player. No password needed."
+              : "Sign in to your Minecraft server panel."}
+          </p>
         </div>
         {error && <ErrorBanner message={error} />}
         <label>
-          Administrator password
-          <span className="input-with-icon">
-            <LockKeyhole size={17} />
-            <input
-              autoFocus
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Enter your password"
-              autoComplete="current-password"
-            />
-          </span>
+          Sign in as
+          <select
+            value={role}
+            onChange={(event) =>
+              setRole(event.target.value as "admin" | "player")
+            }
+          >
+            <option value="admin">Administrator</option>
+            <option value="player">Player</option>
+          </select>
         </label>
-        <button className="button primary wide" disabled={loading || !password}>
+        {!demo && (
+          <label>
+            {role === "admin" ? "Administrator" : "Player"} password
+            <span className="input-with-icon">
+              <LockKeyhole size={17} />
+              <input
+                autoFocus
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Enter your password"
+                autoComplete="current-password"
+              />
+            </span>
+          </label>
+        )}
+        <button
+          className="button primary wide"
+          disabled={loading || (!demo && !password)}
+        >
           {loading && <LoaderCircle className="spin" size={17} />}
-          Sign in
+          {demo ? "Explore demo" : "Sign in"}
         </button>
-        <p className="login-default-password">
-          Default password: <code>mineserver123!</code>. To use a different
-          password, set <code>ADMIN_PASSWORD</code> in <code>.env</code> before
-          the first start.
-        </p>
+        {!demo && role === "admin" && (
+          <p className="login-default-password">
+            Default password: <code>mineserver123!</code>. To use a different
+            password, set <code>ADMIN_PASSWORD</code> in <code>.env</code>{" "}
+            before the first start.
+          </p>
+        )}
         <p className="login-footnote">
-          Protected by a secure, host-local administrator session.
+          Protected by a secure, host-local session.
         </p>
       </form>
     </div>

@@ -104,6 +104,7 @@ export function AccountPage() {
           password
         </button>
       </form>
+      <PlayerAccessCard />
       <MarketplaceSettingsCard />
     </Layout>
   );
@@ -264,6 +265,106 @@ function MarketplaceSettingsCard() {
           </button>
         )}
       </div>
+    </form>
+  );
+}
+
+function PlayerAccessCard() {
+  const [enabled, setEnabled] = useState(false);
+  const [hasPassword, setHasPassword] = useState(false);
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    void api<{ enabled: boolean; hasPassword: boolean }>(
+      "/api/auth/player-access",
+    )
+      .then((result) => {
+        setEnabled(result.enabled);
+        setHasPassword(result.hasPassword);
+      })
+      .catch((caught: unknown) =>
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "Unable to load player access",
+        ),
+      );
+  }, []);
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    setSaved("");
+    try {
+      const result = await api<{ enabled: boolean; hasPassword: boolean }>(
+        "/api/auth/player-access",
+        {
+          method: "PUT",
+          ...jsonBody({ enabled, ...(password ? { password } : {}) }),
+        },
+      );
+      setEnabled(result.enabled);
+      setHasPassword(result.hasPassword);
+      setPassword("");
+      setSaved("Player access saved.");
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Unable to save player access",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <form className="account-card panel" onSubmit={(event) => void save(event)}>
+      <div className="account-icon">
+        <ShieldCheck size={23} />
+      </div>
+      <div>
+        <h2>Player access</h2>
+        <p>
+          Let players view servers and request marketplace projects with a
+          shared player password.
+        </p>
+      </div>
+      {error && <ErrorBanner message={error} />}
+      {saved && <p className="notice-banner">{saved}</p>}
+      <label className="settings-toggle">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => setEnabled(event.target.checked)}
+        />{" "}
+        Enable player sign-in
+      </label>
+      <label>
+        Player password
+        <input
+          type="password"
+          autoComplete="new-password"
+          minLength={12}
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder={
+            hasPassword
+              ? "Leave blank to keep current password"
+              : "At least 12 characters"
+          }
+        />
+        <small className="muted">
+          Share this password with players. It cannot manage the server.
+        </small>
+      </label>
+      <button
+        className="button primary"
+        disabled={saving || (!!password && password.length < 12)}
+      >
+        Save player access
+      </button>
     </form>
   );
 }

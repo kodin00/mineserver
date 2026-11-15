@@ -10,7 +10,8 @@ import { api, jsonBody, setUnauthorizedHandler } from "./api";
 
 interface AuthContextValue {
   authenticated: boolean | null;
-  login(password: string): Promise<void>;
+  role: "admin" | "player" | null;
+  login(password: string, role: "admin" | "player"): Promise<void>;
   logout(): Promise<void>;
 }
 
@@ -18,9 +19,13 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [role, setRole] = useState<"admin" | "player" | null>(null);
   useEffect(() => {
-    api("/api/auth/me")
-      .then(() => setAuthenticated(true))
+    api<{ role: "admin" | "player" }>("/api/auth/me")
+      .then((session) => {
+        setRole(session.role);
+        setAuthenticated(true);
+      })
       .catch(() => setAuthenticated(false));
   }, []);
   useEffect(() => {
@@ -32,21 +37,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextValue>(
     () => ({
       authenticated,
-      async login(password) {
-        await api("/api/auth/login", {
-          method: "POST",
-          ...jsonBody({ password }),
-        });
+      role,
+      async login(password, role) {
+        const session = await api<{ role: "admin" | "player" }>(
+          "/api/auth/login",
+          {
+            method: "POST",
+            ...jsonBody({ password, role }),
+          },
+        );
+        setRole(session.role);
         setAuthenticated(true);
       },
       async logout() {
         await api("/api/auth/logout", { method: "POST" }).catch(
           () => undefined,
         );
+        setRole(null);
         setAuthenticated(false);
       },
     }),
-    [authenticated],
+    [authenticated, role],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

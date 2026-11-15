@@ -26,6 +26,8 @@ export function OverviewTab({
   const [operations, setOperations] = useState<Operation[]>([]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [confirmPull, setConfirmPull] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmRebuild, setConfirmRebuild] = useState(false);
 
   useEffect(() => {
@@ -70,6 +72,28 @@ export function OverviewTab({
   return (
     <div className="tab-stack">
       <ConfirmationDialog
+        open={confirmPull}
+        title="Pull images and recreate the server?"
+        body="Pulling images may recreate the server and disconnect players."
+        confirmLabel="Pull images"
+        onCancel={() => setConfirmPull(false)}
+        onConfirm={() => {
+          setConfirmPull(false);
+          void action("pull");
+        }}
+      />
+      <ConfirmationDialog
+        open={confirmRestart}
+        title="Restart this server?"
+        body="Players will be disconnected while the server restarts."
+        confirmLabel="Restart server"
+        onCancel={() => setConfirmRestart(false)}
+        onConfirm={() => {
+          setConfirmRestart(false);
+          void action("restart");
+        }}
+      />
+      <ConfirmationDialog
         open={confirmRebuild}
         title="Rebuild this container?"
         body="The current container will be removed and recreated from the current local image. Server data is preserved, and all pending configuration changes will be applied."
@@ -111,7 +135,7 @@ export function OverviewTab({
                 <button
                   className="button ghost"
                   disabled={!!busy}
-                  onClick={() => void action("restart")}
+                  onClick={() => setConfirmRestart(true)}
                 >
                   {busy === "restart" ? (
                     <LoaderCircle className="spin" size={17} />
@@ -151,7 +175,7 @@ export function OverviewTab({
           <button
             className="button ghost"
             disabled={!!busy}
-            onClick={() => void action("pull")}
+            onClick={() => setConfirmPull(true)}
           >
             <Download size={17} /> Pull images
           </button>

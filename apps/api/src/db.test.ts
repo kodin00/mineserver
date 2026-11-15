@@ -123,6 +123,9 @@ describe("schema upgrade from an existing panel database", () => {
         JSON.stringify(ServerConfigSchema.parse({ name: "Legacy" })),
         JSON.stringify(ServerConfigSchema.parse({ name: "Legacy" })),
       );
+    legacy
+      .prepare("INSERT INTO sessions VALUES(?,?,?,?)")
+      .run("legacy-token", "csrf", "2099-01-01", "now");
     legacy.close();
 
     // Opening it with the current Store must migrate in place.
@@ -130,7 +133,11 @@ describe("schema upgrade from an existing panel database", () => {
     const migrated = store.db.prepare("PRAGMA user_version").get() as {
       user_version: number;
     };
-    expect(migrated.user_version).toBeGreaterThanOrEqual(6);
+    expect(migrated.user_version).toBeGreaterThanOrEqual(7);
+    expect(store.getSession("legacy-token")?.role).toBe("admin");
+    expect(store.getPlayerAccess().enabled).toBe(0);
+    const pending = store.createModRequest("legacy-1", []);
+    store.transitionModRequest("legacy-1", pending.id, "pending", "installing");
 
     // The pre-existing row survived, revision counters intact.
     expect(store.getServer("legacy-1")).toMatchObject({
@@ -160,5 +167,10 @@ describe("schema upgrade from an existing panel database", () => {
       modrinth_token: null,
     });
     store.db.close();
+    const reopened = new Store(file);
+    expect(reopened.getModRequest("legacy-1", pending.id)).toMatchObject({
+      status: "failed",
+    });
+    reopened.db.close();
   });
 });

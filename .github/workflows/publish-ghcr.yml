@@ -35,6 +35,8 @@ jobs:
         run: npm test
 
       - name: Validate compose file
+        env:
+          ADMIN_PASSWORD: ci-validation-only
         run: docker compose config
 
   publish:

@@ -5,6 +5,7 @@ import {
   LoginSchema,
   addonKind,
 } from "@mineserver/shared";
+import { z } from "zod";
 import { hash, verify } from "@node-rs/argon2";
 import { createAddonsArchive } from "../addons.js";
 import { instancePaths } from "../compose.js";
@@ -100,8 +101,25 @@ export async function authRoutes(
     { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = LoginSchema.parse(request.body);
-      const admin = store.getAdmin();
-      if (!admin || !(await verify(admin.password_hash, body.password))) {
+      const credential =
+        body.role === "admin"
+          ? store.getAdmin()?.password_hash
+          : store.getPlayerAccess().enabled
+            ? store.getPlayerAccess().password_hash
+            : null;
+      if (!credential || !(await verify(credential, body.password))) {
+        return reply.code(401).send({ error: "Invalid password" });
+      }
+      // Password verification is asynchronous. A rotation or disablement that
+      // finishes while it runs must not be followed by a new stale session.
+      const playerAccess = store.getPlayerAccess();
+      const currentCredential =
+        body.role === "admin"
+          ? store.getAdmin()?.password_hash
+          : playerAccess.enabled
+            ? playerAccess.password_hash
+            : null;
+      if (currentCredential !== credential) {
         return reply.code(401).send({ error: "Invalid password" });
       }
       const token = randomToken();
@@ -109,7 +127,12 @@ export async function authRoutes(
       const expires = new Date(
         Date.now() + config.SESSION_TTL_HOURS * 60 * 60 * 1000,
       );
-      store.createSession(sha256(token), csrf, expires.toISOString());
+      store.createSession(
+        sha256(token),
+        csrf,
+        expires.toISOString(),
+        body.role,
+      );
       const cookieBase = {
         path: "/",
         sameSite: "strict" as const,
@@ -118,13 +141,14 @@ export async function authRoutes(
       };
       reply.setCookie(SESSION_COOKIE, token, { ...cookieBase, httpOnly: true });
       reply.setCookie(CSRF_COOKIE, csrf, { ...cookieBase, httpOnly: false });
-      return { authenticated: true, csrfToken: csrf };
+      return { authenticated: true, csrfToken: csrf, role: body.role };
     },
   );
 
   app.get("/api/auth/me", async (request) => ({
     authenticated: true,
     csrfToken: request.session!.csrf,
+    role: request.session!.role,
   }));
 
   app.post("/api/auth/logout", async (request, reply) => {
@@ -132,6 +156,30 @@ export async function authRoutes(
     reply.clearCookie(SESSION_COOKIE, { path: "/" });
     reply.clearCookie(CSRF_COOKIE, { path: "/" });
     return { ok: true };
+  });
+
+  app.get("/api/auth/player-access", async () => {
+    const access = store.getPlayerAccess();
+    return {
+      enabled: access.enabled === 1,
+      hasPassword: !!access.password_hash,
+    };
+  });
+  app.put("/api/auth/player-access", async (request) => {
+    const body = z
+      .object({
+        enabled: z.boolean(),
+        password: z.string().min(12).max(512).optional(),
+      })
+      .parse(request.body);
+    const previous = store.getPlayerAccess();
+    const passwordHash = body.password
+      ? await hash(body.password)
+      : previous.password_hash;
+    if (body.enabled && !passwordHash)
+      throw new Error("Set a player password before enabling access");
+    store.setPlayerAccess(body.enabled, passwordHash);
+    return { enabled: body.enabled, hasPassword: !!passwordHash };
   });
 
   app.post("/api/auth/password", async (request) => {

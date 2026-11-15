@@ -29,6 +29,7 @@ export function InstallDialog({
   installedProject,
   onClose,
   onInstalled,
+  onRequestSelection,
 }: {
   server: ServerSummary;
   project: ModrinthSearchHit | null;
@@ -38,6 +39,7 @@ export function InstallDialog({
   installedProject: MarketplaceInventoryItem | null;
   onClose(): void;
   onInstalled(operation: Operation): void;
+  onRequestSelection?: ((versionId: string) => void) | undefined;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [versions, setVersions] = useState<ModrinthVersionSummary[]>([]);
@@ -183,6 +185,10 @@ export function InstallDialog({
 
   async function install() {
     if (!chosen) return;
+    if (onRequestSelection) {
+      onRequestSelection(chosen.id);
+      return;
+    }
     setInstalling(true);
     setError("");
     try {
@@ -355,7 +361,7 @@ export function InstallDialog({
           </div>
         )}
 
-        {required.length > 0 && (
+        {required.length > 0 && !onRequestSelection && (
           <>
             <h3 className="install-dialog-subhead">Required dependencies</h3>
             <label className="install-dependency-toggle">
@@ -417,6 +423,8 @@ export function InstallDialog({
               (installedProject !== null &&
                 chosen?.id === installedProject.versionId) ? (
               "Already installed"
+            ) : onRequestSelection ? (
+              "Add to request"
             ) : installedProject ? (
               "Update"
             ) : (

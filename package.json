@@ -11,7 +11,8 @@
     "build": "npm run build -w @mineserver/shared && npm run build -w @mineserver/api && npm run build -w @mineserver/web",
     "typecheck": "npm run build -w @mineserver/shared && npm run typecheck -w @mineserver/api && npm run typecheck -w @mineserver/web",
     "test": "npm run build -w @mineserver/shared && npm run test -w @mineserver/shared && npm run test -w @mineserver/api && npm run test -w @mineserver/web",
-    "format:check": "prettier --check . --ignore-unknown"
+    "format:check": "prettier --check . --ignore-unknown",
+    "build:demo": "npm run build -w @mineserver/shared && VITE_DEMO=true VITE_BASE_PATH=/mineserver/ npm run build -w @mineserver/web"
   },
   "devDependencies": {
     "concurrently": "^9.2.0",

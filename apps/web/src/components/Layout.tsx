@@ -26,14 +26,31 @@ export function Layout({
           <span>Mineserver</span>
         </Link>
         <div className="top-actions">
-          <Link
-            className="icon-button"
-            aria-label="Account settings"
-            title="Account settings"
-            to="/account"
-          >
-            <Settings size={18} />
-          </Link>
+          <span className="role-label">
+            {auth.role === "admin" ? "Administrator" : "Player"}
+          </span>
+          {import.meta.env.VITE_DEMO === "true" && (
+            <button
+              className="button ghost"
+              onClick={() =>
+                void auth
+                  .login("demo", auth.role === "admin" ? "player" : "admin")
+                  .then(() => navigate("/"))
+              }
+            >
+              Switch to {auth.role === "admin" ? "player" : "admin"}
+            </button>
+          )}
+          {auth.role === "admin" && (
+            <Link
+              className="icon-button"
+              aria-label="Account settings"
+              title="Account settings"
+              to="/account"
+            >
+              <Settings size={18} />
+            </Link>
+          )}
           <button
             className="icon-button"
             aria-label="Sign out"
@@ -44,6 +61,11 @@ export function Layout({
           </button>
         </div>
       </header>
+      {import.meta.env.VITE_DEMO === "true" && (
+        <div className="demo-banner" role="status">
+          Demo mode · Sample data only; no real servers are controlled.
+        </div>
+      )}
       <main className="page">
         <div className="page-heading">
           <div>

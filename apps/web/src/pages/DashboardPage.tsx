@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ServerSummary } from "@mineserver/shared";
+import { useAuth } from "../auth";
 import { api } from "../api";
 import {
   EmptyState,
@@ -20,6 +21,7 @@ import {
 } from "../components/Layout";
 
 export function DashboardPage() {
+  const { role } = useAuth();
   const [servers, setServers] = useState<ServerSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -56,9 +58,11 @@ export function DashboardPage() {
           >
             <RefreshCw size={17} /> Refresh
           </button>
-          <Link className="button primary" to="/servers/new">
-            <CirclePlus size={17} /> New server
-          </Link>
+          {role === "admin" && import.meta.env.VITE_DEMO !== "true" && (
+            <Link className="button primary" to="/servers/new">
+              <CirclePlus size={17} /> New server
+            </Link>
+          )}
         </>
       }
     >
@@ -66,12 +70,16 @@ export function DashboardPage() {
       {!loading && servers.length === 0 ? (
         <EmptyState
           icon={<Box size={28} />}
-          title="Build your first world"
+          title={
+            role === "admin" ? "Build your first world" : "No servers available"
+          }
           body="Create an isolated Minecraft server with its own version, port, memory, add-ons, and backups."
           action={
-            <Link className="button primary" to="/servers/new">
-              <CirclePlus size={17} /> Create server
-            </Link>
+            role === "admin" && import.meta.env.VITE_DEMO !== "true" ? (
+              <Link className="button primary" to="/servers/new">
+                <CirclePlus size={17} /> Create server
+              </Link>
+            ) : undefined
           }
         />
       ) : (
@@ -101,15 +109,17 @@ export function DashboardPage() {
                 <span>
                   <Cpu size={15} /> {server.config.type}
                 </span>
-                <span>
-                  <HardDrive size={15} /> {server.config.maxMemory}
-                </span>
+                {role === "admin" && (
+                  <span>
+                    <HardDrive size={15} /> {server.config.maxMemory}
+                  </span>
+                )}
                 <span>
                   <Users size={15} /> {server.config.maxPlayers}
                 </span>
               </div>
               <div className="server-address">
-                <code>:{server.config.port}</code>
+                <code>{server.config.publicAddress || "Address not set"}</code>
                 <span>Minecraft {server.config.version}</span>
               </div>
               {server.restartRequired && (

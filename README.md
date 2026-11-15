@@ -2,6 +2,8 @@
 
 Run and manage multiple Minecraft Java servers from one web panel. Create servers, view logs, run console commands, install mods or plugins, and make backups—all from your browser.
 
+Try the [interactive demo](https://kodin00.github.io/mineserver/). Switch between admin and player to explore the panel and mod request workflow. The demo runs entirely in your browser with sample data; it cannot create or connect to real servers.
+
 ## Quick start
 
 Requires a Linux machine with [Docker Engine](https://docs.docker.com/engine/install/), Docker Compose v2, and `curl`.
@@ -73,6 +75,25 @@ Enable **Sleep when nobody is playing and wake on join** in a server's settings.
 ## Mod marketplace
 
 The **Browse** tab on a server searches [Modrinth](https://modrinth.com), filtered to that server's loader and Minecraft version, and installs mods, plugins, and datapacks with verification. No account or API key is needed; the panel only needs outbound HTTPS to `api.modrinth.com` and `cdn.modrinth.com`. Everything optional (enable/disable, contact details, private-project token) is configured in the panel under **Settings**, not in `.env`. A server restart is required after installing files; datapacks also need `/reload` or a restart.
+
+## Admin and player access
+
+Sign in as **Administrator** with your existing panel password. Open **Account settings** (the gear in the header), enable **Player access**, and set a separate player password. Share that password with your players; choose **Player** on the sign-in screen to use it. Player access is shared across the panel's servers. Disabling player access or changing its password signs out existing player sessions.
+
+Players can view servers, copy their connection addresses, browse compatible marketplace content, and submit requests. Server settings, files, console commands, lifecycle controls, and request decisions are restricted to admins by the API.
+
+In **Browse**, players can select several mods and click **Request to admin**. The server's **Requests** tab shows the request history. Admins can approve or decline a pending request. Approval downloads and installs the selected content and required dependencies automatically; it leaves the running server alone. Check the request status for completion or installation errors. Restarting or applying changes is a separate admin action that asks for confirmation.
+
+To publish a connection address, open a server's **Settings** and set **Public server address** to the hostname or IP players should use, including a port when needed (for example, `play.example.com:25566`). Players can copy it from the server overview. This is a displayed address; configure DNS, routing, and port forwarding separately. Changing only this address does not require restarting Minecraft.
+
+## Demo development
+
+```sh
+npm run build:demo
+VITE_BASE_PATH=/mineserver/ npm exec -w @mineserver/web vite preview
+```
+
+The GitHub Pages workflow builds the demo separately from the production app. It uses hash-based navigation so server pages can be refreshed on GitHub Pages. Demo actions update sample state in the browser, and unsupported actions show a demo notice instead of calling the API.
 
 ## Updating
 

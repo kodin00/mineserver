@@ -11,8 +11,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServerConfigSchema } from "@mineserver/shared";
+import { hash } from "@node-rs/argon2";
 import { listAddons } from "./addons.js";
 import { buildApp } from "./app.js";
 import { instancePaths } from "./compose.js";
@@ -1296,5 +1297,342 @@ describe("modrinth marketplace", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().modrinthEnabled).toBe(false);
     await app.close();
+  });
+});
+
+describe("player access and mod requests", () => {
+  it("enforces a player allowlist and hides server secrets", async () => {
+    const docker = {
+      status: async () => ({ state: "stopped", exists: true }),
+    } as unknown as ComposeManager;
+    const { app, store, serverId } = await fixture(docker);
+    const row = store.getServer(serverId)!;
+    store.updateServer(
+      serverId,
+      ServerConfigSchema.parse({
+        ...JSON.parse(row.config_json),
+        publicAddress: "play.example.org",
+        advancedEnv: { SECRET: "hidden" },
+        seed: "secret-seed",
+      }),
+    );
+    store.createSession(
+      sha256("player-token"),
+      "csrf",
+      new Date(Date.now() + 60000).toISOString(),
+      "player",
+    );
+    const headers = {
+      cookie: "ms_session=player-token",
+      "x-csrf-token": "csrf",
+    };
+    const summary = await app.inject({
+      method: "GET",
+      url: `/api/servers/${serverId}`,
+      headers,
+    });
+    expect(summary.statusCode).toBe(200);
+    expect(summary.json().config.publicAddress).toBe("play.example.org");
+    expect(summary.body).not.toContain("hidden");
+    expect(summary.body).not.toContain("secret-seed");
+    for (const [method, url] of [
+      ["GET", `/api/servers/${serverId}/files`],
+      ["GET", "/api/settings/marketplace"],
+      ["GET", "/ws/console"],
+      ["POST", `/api/servers/${serverId}/actions/restart`],
+      ["PUT", `/api/servers/${serverId}`],
+      ["POST", "/api/auth/password"],
+      ["POST", `/api/servers/${serverId}/mod-requests/request-1/approve`],
+      ["POST", `/api/servers/${serverId}/mod-requests/request-1/decline`],
+      ["PUT", "/api/auth/player-access"],
+    ] as const) {
+      expect((await app.inject({ method, url, headers })).statusCode).toBe(403);
+    }
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/servers/${serverId}/mod-requests`,
+          headers: { cookie: headers.cookie },
+          payload: { items: [] },
+        })
+      ).statusCode,
+    ).toBe(403);
+    await app.close();
+    store.db.close();
+  });
+
+  it("provisions player login and revokes sessions on password changes and disable", async () => {
+    const { app, store, sessionToken, csrfToken } = await fixture();
+    store.createAdmin(await hash("admin password 123"));
+    const headers = {
+      cookie: `ms_session=${sessionToken}`,
+      "x-csrf-token": csrfToken,
+    };
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/auth/player-access",
+          headers,
+          payload: { enabled: true, password: "player password 123" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const bad = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { role: "admin", password: "player password 123" },
+    });
+    expect(bad.statusCode).toBe(401);
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { role: "player", password: "player password 123" },
+    });
+    expect(login.statusCode).toBe(200);
+    expect(login.json().role).toBe("player");
+    const playerCookie = login.cookies.find(
+      (cookie) => cookie.name === "ms_session",
+    )!;
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/auth/me",
+          headers: { cookie: `ms_session=${playerCookie.value}` },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await app.inject({
+      method: "PUT",
+      url: "/api/auth/player-access",
+      headers,
+      payload: { enabled: true, password: "new player password" },
+    });
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/auth/me",
+          headers: { cookie: `ms_session=${playerCookie.value}` },
+        })
+      ).statusCode,
+    ).toBe(401);
+    const login2 = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { role: "player", password: "new player password" },
+    });
+    const cookie2 = login2.cookies.find(
+      (cookie) => cookie.name === "ms_session",
+    )!;
+    await app.inject({
+      method: "PUT",
+      url: "/api/auth/player-access",
+      headers,
+      payload: { enabled: false },
+    });
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/auth/me",
+          headers: { cookie: `ms_session=${cookie2.value}` },
+        })
+      ).statusCode,
+    ).toBe(401);
+    await app.close();
+    store.db.close();
+  });
+
+  it("does not issue a player session if access is disabled during password verification", async () => {
+    const { app, store } = await fixture();
+    const passwordHash = await hash("player password 123");
+    store.setPlayerAccess(true, passwordHash);
+    const getAccess = store.getPlayerAccess.bind(store);
+    const access = vi
+      .spyOn(store, "getPlayerAccess")
+      .mockImplementationOnce(() => {
+        const value = getAccess();
+        queueMicrotask(() => store.setPlayerAccess(false, passwordHash));
+        return value;
+      });
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: { role: "player", password: "player password 123" },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.cookies).toHaveLength(0);
+    } finally {
+      access.mockRestore();
+      await app.close();
+      store.db.close();
+    }
+  });
+
+  it("serializes decisions and reports failed installations", async () => {
+    let fail = false;
+    const contents = "fake jar";
+    const api = {
+      getVersion: async (id: string) => {
+        if (fail) throw new Error("Network unavailable");
+        return {
+          id,
+          projectId: id,
+          versionNumber: "1.0",
+          dependencies: [],
+          files: [
+            {
+              filename: `${id}.jar`,
+              primary: true,
+              size: contents.length,
+              sha512: createHash("sha512").update(contents).digest("hex"),
+              sha1: null,
+              url: `https://cdn.modrinth.com/${id}.jar`,
+            },
+          ],
+        };
+      },
+      getProject: async () => ({ title: "Test mod" }),
+      listVersions: async ({ idOrSlug }: { idOrSlug: string }) => [
+        { id: idOrSlug, projectId: idOrSlug },
+      ],
+      downloadFile: async (
+        _file: unknown,
+        temp: { stream: NodeJS.WritableStream },
+      ) => {
+        temp.stream.end(contents);
+        await new Promise((resolve) => temp.stream.on("close", resolve));
+      },
+    } as unknown as ModrinthApi;
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture(
+      undefined,
+      api,
+    );
+    store.updatePanelSettings({ enabled: true, contact: "" });
+    const headers = {
+      cookie: `ms_session=${sessionToken}`,
+      "x-csrf-token": csrfToken,
+    };
+    const create = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/mod-requests`,
+      headers,
+      payload: {
+        items: [
+          { projectId: "abcdefgh", versionId: "abcdefgh", projectType: "mod" },
+        ],
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const id = create.json().id;
+    expect(create.json().items[0].title).toBe("Test mod");
+    fail = true;
+    const approve = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/mod-requests/${id}/approve`,
+      headers,
+    });
+    expect(approve.statusCode).toBe(202);
+    await expect
+      .poll(() => store.getModRequest(serverId, id)?.status)
+      .toBe("failed");
+    expect(store.getModRequest(serverId, id)?.error).toContain(
+      "0 of 1 requested projects installed",
+    );
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/servers/${serverId}/mod-requests/${id}/decline`,
+          headers,
+        })
+      ).statusCode,
+    ).toBe(409);
+    fail = false;
+    const invalid = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/mod-requests`,
+      headers,
+      payload: {
+        items: [
+          { projectId: "abcdefgh", versionId: "invalid1", projectType: "mod" },
+        ],
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    const duplicate = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/mod-requests`,
+      headers,
+      payload: {
+        items: [
+          { projectId: "abcdefgh", versionId: "abcdefgh", projectType: "mod" },
+          { projectId: "abcdefgh", versionId: "abcdefgh", projectType: "mod" },
+        ],
+      },
+    });
+    expect(duplicate.statusCode).toBe(400);
+    const success = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/mod-requests`,
+      headers,
+      payload: {
+        items: [
+          { projectId: "abcdefgh", versionId: "abcdefgh", projectType: "mod" },
+          { projectId: "ijklmnop", versionId: "ijklmnop", projectType: "mod" },
+        ],
+      },
+    });
+    expect(success.statusCode).toBe(201);
+    const successId = success.json().id;
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/servers/${serverId}/mod-requests/${successId}/approve`,
+          headers,
+        })
+      ).statusCode,
+    ).toBe(202);
+    await expect
+      .poll(() => store.getModRequest(serverId, successId)?.status)
+      .toBe("approved");
+    expect(
+      await readFile(
+        path.join(
+          instancePaths(config.instancesRoot, serverId).addons,
+          "abcdefgh.jar",
+        ),
+        "utf8",
+      ),
+    ).toBe(contents);
+    expect(
+      await readFile(
+        path.join(
+          instancePaths(config.instancesRoot, serverId).addons,
+          "ijklmnop.jar",
+        ),
+        "utf8",
+      ),
+    ).toBe(contents);
+    const pending = store.createModRequest(serverId, [
+      { projectId: "abcdefgh", versionId: "abcdefgh", projectType: "mod" },
+    ]);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/servers/${serverId}/mod-requests/${pending.id}/decline`,
+          headers,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(store.getModRequest(serverId, pending.id)?.status).toBe("declined");
+    await app.close();
+    store.db.close();
   });
 });

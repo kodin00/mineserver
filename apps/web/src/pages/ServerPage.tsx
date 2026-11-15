@@ -9,6 +9,8 @@ import {
   LayoutDashboard,
   PackageSearch,
   RefreshCw,
+  ClipboardList,
+  Copy,
   ScrollText,
   Settings,
   SquareTerminal,
@@ -17,6 +19,7 @@ import {
 } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import type { ServerSummary } from "@mineserver/shared";
+import { useAuth } from "../auth";
 import { api } from "../api";
 import { ErrorBanner, Layout, StatusDot } from "../components/Layout";
 import { OverviewTab } from "./server/OverviewTab";
@@ -28,6 +31,7 @@ import { SettingsTab } from "./server/SettingsTab";
 import { FilesTab } from "./server/FilesTab";
 import { DockerLogsTab } from "./server/DockerLogsTab";
 import { WorldsTab } from "./server/WorldsTab";
+import { RequestsTab } from "./server/RequestsTab";
 import { PlayersTab } from "./server/PlayersTab";
 
 const tabs = [
@@ -37,6 +41,7 @@ const tabs = [
   ["docker-logs", "Docker logs", ScrollText],
   ["addons", "Add-ons", Boxes],
   ["browse", "Browse", PackageSearch],
+  ["requests", "Requests", ClipboardList],
   ["files", "Files", FolderTree],
   ["world", "World", Globe2],
   ["backups", "Backups", DatabaseBackup],
@@ -44,6 +49,10 @@ const tabs = [
 ] as const;
 
 export function ServerPage() {
+  const { role } = useAuth();
+  const demo = import.meta.env.VITE_DEMO === "true";
+  const [copyMessage, setCopyMessage] = useState("");
+  const [pending, setPending] = useState(0);
   const { id = "" } = useParams();
   const [search, setSearch] = useSearchParams();
   const tab = search.get("tab") ?? "overview";
@@ -94,6 +103,22 @@ export function ServerPage() {
     return () => clearInterval(timer);
   }, [load]);
 
+  useEffect(() => {
+    const loadRequests = () =>
+      void api<{ requests: Array<{ status: string }> }>(
+        `/api/servers/${id}/mod-requests`,
+      )
+        .then((result) =>
+          setPending(
+            result.requests.filter((item) => item.status === "pending").length,
+          ),
+        )
+        .catch(() => undefined);
+    loadRequests();
+    const timer = setInterval(loadRequests, 5000);
+    return () => clearInterval(timer);
+  }, [id]);
+
   if (!server) {
     return (
       <Layout title="Loading server…">
@@ -101,9 +126,14 @@ export function ServerPage() {
       </Layout>
     );
   }
-  const visibleTabs = marketplaceEnabled
-    ? tabs
-    : tabs.filter(([key]) => key !== "browse");
+  const visibleTabs = tabs.filter(
+    ([key]) =>
+      (marketplaceEnabled || key !== "browse") &&
+      (role === "admin" || ["overview", "browse", "requests"].includes(key)) &&
+      (!demo ||
+        !["console", "world", "addons", "backups", "files"].includes(key)),
+  );
+  const activeTab = visibleTabs.some(([key]) => key === tab) ? tab : "overview";
 
   return (
     <Layout
@@ -127,7 +157,7 @@ export function ServerPage() {
       }
     >
       {error && <ErrorBanner message={error} />}
-      {server.runtimeError && (
+      {role === "admin" && server.runtimeError && (
         <div className="runtime-error-banner" role="alert">
           <TriangleAlert size={20} />
           <span>
@@ -147,7 +177,7 @@ export function ServerPage() {
           </button>
         </div>
       )}
-      {server.restartRequired && (
+      {role === "admin" && server.restartRequired && (
         <div className="notice-banner">
           <Blocks size={19} />
           <span>
@@ -160,25 +190,71 @@ export function ServerPage() {
         {visibleTabs.map(([key, label, Icon]) => (
           <button
             key={key}
-            className={tab === key ? "active" : ""}
+            className={activeTab === key ? "active" : ""}
             onClick={() => setSearch(key === "overview" ? {} : { tab: key })}
           >
             <Icon size={17} /> {label}
+            {key === "requests" && role === "admin" && pending > 0
+              ? ` (${pending})`
+              : ""}
           </button>
         ))}
       </nav>
-      {tab === "overview" && <OverviewTab server={server} refresh={load} />}
-      {tab === "players" && <PlayersTab server={server} />}
-      {tab === "console" && <ConsoleTab server={server} />}
-      {tab === "docker-logs" && <DockerLogsTab server={server} />}
-      {tab === "addons" && <AddonsTab server={server} />}
-      {tab === "browse" && marketplaceEnabled && (
+      {activeTab === "overview" && (
+        <section className="panel address-panel">
+          <div>
+            <h2>Join address</h2>
+            <p>
+              {server.config.publicAddress ? (
+                <code>{server.config.publicAddress}</code>
+              ) : (
+                "An administrator has not set a public address yet."
+              )}
+            </p>
+          </div>
+          {server.config.publicAddress && (
+            <button
+              className="button ghost"
+              onClick={() => {
+                if (!navigator.clipboard) {
+                  setCopyMessage("Select and copy the address above.");
+                  return;
+                }
+                void navigator.clipboard
+                  .writeText(server.config.publicAddress)
+                  .then(() => setCopyMessage("Address copied."))
+                  .catch(() =>
+                    setCopyMessage("Select and copy the address above."),
+                  );
+              }}
+            >
+              <Copy size={16} /> Copy address
+            </button>
+          )}
+          {copyMessage && <span role="status">{copyMessage}</span>}
+        </section>
+      )}
+      {activeTab === "overview" && role === "admin" && (
+        <OverviewTab server={server} refresh={load} />
+      )}
+      {activeTab === "requests" && <RequestsTab serverId={id} />}
+      {activeTab === "players" && <PlayersTab server={server} />}
+      {activeTab === "console" && <ConsoleTab server={server} />}
+      {activeTab === "docker-logs" && <DockerLogsTab server={server} />}
+      {activeTab === "addons" && <AddonsTab server={server} />}
+      {activeTab === "browse" && marketplaceEnabled && (
         <BrowseTab server={server} refresh={load} />
       )}
-      {tab === "files" && <FilesTab server={server} />}
-      {tab === "world" && <WorldsTab server={server} refreshServer={load} />}
-      {tab === "backups" && <BackupsTab server={server} refreshServer={load} />}
-      {tab === "settings" && <SettingsTab server={server} refresh={load} />}
+      {activeTab === "files" && <FilesTab server={server} />}
+      {activeTab === "world" && (
+        <WorldsTab server={server} refreshServer={load} />
+      )}
+      {activeTab === "backups" && (
+        <BackupsTab server={server} refreshServer={load} />
+      )}
+      {activeTab === "settings" && (
+        <SettingsTab server={server} refresh={load} />
+      )}
     </Layout>
   );
 }

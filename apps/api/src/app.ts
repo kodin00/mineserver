@@ -28,7 +28,7 @@ export interface AppContext {
 
 declare module "fastify" {
   interface FastifyRequest {
-    session?: { hash: string; csrf: string };
+    session?: { hash: string; csrf: string; role: "admin" | "player" };
   }
 }
 
@@ -86,6 +86,23 @@ export async function buildApp(
     if (!pathname.startsWith("/api/") && !pathname.startsWith("/ws/")) return;
     const authResult = await authenticate(request, reply, store);
     if (authResult) return authResult;
+    if (request.session?.role === "player") {
+      const get = request.method === "GET";
+      const allowed =
+        (get &&
+          (pathname === "/api/auth/me" ||
+            pathname === "/api/metadata" ||
+            pathname === "/api/servers" ||
+            /^\/api\/servers\/[^/]+(?:\/mod-requests)?$/.test(pathname) ||
+            pathname === "/api/modrinth/tags" ||
+            pathname === "/api/modrinth/search" ||
+            /^\/api\/modrinth\/projects\/[^/]+\/versions$/.test(pathname))) ||
+        (request.method === "POST" &&
+          (pathname === "/api/auth/logout" ||
+            /^\/api\/servers\/[^/]+\/mod-requests$/.test(pathname)));
+      if (!allowed)
+        return reply.code(403).send({ error: "Administrator access required" });
+    }
     if (
       !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
       pathname.startsWith("/api/")

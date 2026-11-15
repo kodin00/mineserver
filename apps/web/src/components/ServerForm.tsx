@@ -143,6 +143,17 @@ export function ServerForm({
             />
           </label>
           <label>
+            Public server address
+            <input
+              value={value.publicAddress}
+              placeholder="play.example.com:25565"
+              onChange={(event) => set("publicAddress", event.target.value)}
+            />
+            <small className="muted">
+              The address players use to join, including the port if needed.
+            </small>
+          </label>
+          <label>
             Host port
             <input
               type="number"

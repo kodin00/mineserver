@@ -20,7 +20,8 @@ import {
   type Operation,
   type ServerSummary,
 } from "@mineserver/shared";
-import { ApiError, api } from "../../api";
+import { useAuth } from "../../auth";
+import { ApiError, api, jsonBody } from "../../api";
 import { Select, type ChoiceOption } from "../../components/ChoiceControls";
 import { EmptyState, ErrorBanner } from "../../components/Layout";
 import {
@@ -56,6 +57,16 @@ export function BrowseTab({
   server: ServerSummary;
   refresh?: () => void;
 }) {
+  const { role } = useAuth();
+  const [requestItems, setRequestItems] = useState<
+    Array<{
+      projectId: string;
+      versionId: string;
+      projectType: MarketplaceProjectType;
+      title: string;
+    }>
+  >([]);
+  const [requestBusy, setRequestBusy] = useState(false);
   const allowedTypes = useMemo(
     () => supportedMarketplaceTypes(server.config.type),
     [server.config.type],
@@ -116,8 +127,8 @@ export function BrowseTab({
   }, [server.id, target]);
 
   useEffect(() => {
-    void loadInstalled();
-  }, [loadInstalled]);
+    if (role === "admin") void loadInstalled();
+  }, [loadInstalled, role]);
 
   useEffect(() => {
     let cancelled = false;
@@ -243,6 +254,65 @@ export function BrowseTab({
 
   return (
     <div className="tab-stack">
+      {role === "player" && requestItems.length > 0 && (
+        <section className="panel request-selection">
+          <h2>Your request ({requestItems.length})</h2>
+          <p className="muted">
+            Select more projects or send these to an administrator.
+          </p>
+          {requestItems.map((item) => (
+            <div className="request-item" key={item.projectId}>
+              <span>{item.title}</span>
+              <button
+                className="button ghost"
+                onClick={() =>
+                  setRequestItems((items) =>
+                    items.filter((entry) => entry.projectId !== item.projectId),
+                  )
+                }
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            className="button primary"
+            disabled={requestBusy}
+            onClick={() => {
+              setRequestBusy(true);
+              setError("");
+              void api(`/api/servers/${server.id}/mod-requests`, {
+                method: "POST",
+                ...jsonBody({
+                  items: requestItems.map(
+                    ({ projectId, versionId, projectType }) => ({
+                      projectId,
+                      versionId,
+                      projectType,
+                    }),
+                  ),
+                }),
+              })
+                .then(() => {
+                  setRequestItems([]);
+                  setInstalled(
+                    "Request sent to the administrator. Check Requests for its status.",
+                  );
+                })
+                .catch((caught: unknown) =>
+                  setError(
+                    caught instanceof Error
+                      ? caught.message
+                      : "Unable to send request",
+                  ),
+                )
+                .finally(() => setRequestBusy(false));
+            }}
+          >
+            Request to admin
+          </button>
+        </section>
+      )}
       {!canInstall && (
         <p className="notice-banner">
           {projectType === "shader"
@@ -450,7 +520,8 @@ export function BrowseTab({
                   >
                     <ExternalLink size={15} /> Modrinth
                   </a>
-                  {canInstall &&
+                  {role === "admin" &&
+                    canInstall &&
                     local &&
                     local.state !== "modified" &&
                     (local.updateCandidate ? (
@@ -468,13 +539,22 @@ export function BrowseTab({
                           : "Installed"}
                       </span>
                     ))}
-                  {canInstall && local?.state === "modified" && (
-                    <span className="disabled-pill">Review file</span>
-                  )}
-                  {canInstall && !local && (
+                  {role === "admin" &&
+                    canInstall &&
+                    local?.state === "modified" && (
+                      <span className="disabled-pill">Review file</span>
+                    )}
+                  {canInstall && (role === "player" || !local) && (
                     <button
                       className="button primary"
-                      disabled={installBusy}
+                      disabled={
+                        installBusy ||
+                        (role === "player" &&
+                          requestItems.length >= 20 &&
+                          !requestItems.some(
+                            (item) => item.projectId === hit.projectId,
+                          ))
+                      }
                       title={
                         installBusy
                           ? "Another install is still running"
@@ -482,7 +562,13 @@ export function BrowseTab({
                       }
                       onClick={() => setSelected(hit)}
                     >
-                      Install
+                      {role === "player"
+                        ? requestItems.some(
+                            (item) => item.projectId === hit.projectId,
+                          )
+                          ? "Change version"
+                          : "Select"
+                        : "Install"}
                     </button>
                   )}
                 </div>
@@ -533,6 +619,24 @@ export function BrowseTab({
             : null
         }
         onClose={() => setSelected(null)}
+        onRequestSelection={
+          role === "player" && selected
+            ? (versionId) => {
+                setRequestItems((items) => [
+                  ...items.filter(
+                    (item) => item.projectId !== selected.projectId,
+                  ),
+                  {
+                    projectId: selected.projectId,
+                    versionId,
+                    projectType,
+                    title: selected.title,
+                  },
+                ]);
+                setSelected(null);
+              }
+            : undefined
+        }
         onInstalled={(started) => {
           setSelected(null);
           setInstalled("");

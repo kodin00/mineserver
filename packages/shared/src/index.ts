@@ -56,6 +56,7 @@ export type AutoSleepSettings = z.infer<typeof AutoSleepSettingsSchema>;
 export const ServerConfigSchema = z
   .object({
     name: z.string().trim().min(1).max(64),
+    publicAddress: z.string().trim().max(255).default(""),
     version: z.string().trim().min(1).max(40).default("LATEST"),
     type: ServerTypeSchema.default("PAPER"),
     port: z.coerce.number().int().min(1024).max(65535).default(25565),
@@ -124,6 +125,7 @@ export type CreateServerInput = z.infer<typeof CreateServerSchema>;
 
 export const LoginSchema = z.object({
   password: z.string().min(1).max(512),
+  role: z.enum(["admin", "player"]).default("admin"),
 });
 
 export const AddonToggleSchema = z.object({

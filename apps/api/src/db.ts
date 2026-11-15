@@ -178,6 +178,100 @@ export class Store {
         throw error;
       }
     }
+    if (version < 7) {
+      const columns = new Set(
+        (
+          this.db.prepare("PRAGMA table_info(sessions)").all() as Array<{
+            name: string;
+          }>
+        ).map((c) => c.name),
+      );
+      if (!columns.has("role"))
+        this.db.exec(
+          "ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'",
+        );
+      this.db
+        .exec(`CREATE TABLE IF NOT EXISTS player_access (id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0, password_hash TEXT);
+        CREATE TABLE IF NOT EXISTS mod_requests (id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, items_json TEXT NOT NULL, status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        PRAGMA user_version=7;`);
+    }
+    this.db
+      .prepare(
+        "UPDATE mod_requests SET status='failed', error='Installation interrupted; some projects may already have been installed', updated_at=? WHERE status='installing'",
+      )
+      .run(new Date().toISOString());
+  }
+
+  getPlayerAccess(): { enabled: number; password_hash: string | null } {
+    return (
+      (this.db
+        .prepare("SELECT enabled,password_hash FROM player_access WHERE id=1")
+        .get() as
+        { enabled: number; password_hash: string | null } | undefined) ?? {
+        enabled: 0,
+        password_hash: null,
+      }
+    );
+  }
+
+  setPlayerAccess(enabled: boolean, passwordHash: string | null) {
+    this.db
+      .prepare(
+        "INSERT INTO player_access(id,enabled,password_hash) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled,password_hash=excluded.password_hash",
+      )
+      .run(enabled ? 1 : 0, passwordHash);
+    this.db.prepare("DELETE FROM sessions WHERE role='player'").run();
+  }
+
+  listModRequests(serverId: string) {
+    return (
+      this.db
+        .prepare(
+          "SELECT * FROM mod_requests WHERE server_id=? ORDER BY created_at DESC",
+        )
+        .all(serverId) as any[]
+    ).map((row) => this.modRequest(row));
+  }
+  getModRequest(serverId: string, id: string) {
+    const row = this.db
+      .prepare("SELECT * FROM mod_requests WHERE server_id=? AND id=?")
+      .get(serverId, id);
+    return row ? this.modRequest(row as any) : undefined;
+  }
+  private modRequest(row: any) {
+    return {
+      id: row.id,
+      serverId: row.server_id,
+      items: JSON.parse(row.items_json),
+      status: row.status,
+      error: row.error,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+  createModRequest(serverId: string, items: unknown) {
+    const id = crypto.randomUUID(),
+      now = new Date().toISOString();
+    this.db
+      .prepare("INSERT INTO mod_requests VALUES(?,?,?,'pending',NULL,?,?)")
+      .run(id, serverId, JSON.stringify(items), now, now);
+    return this.getModRequest(serverId, id)!;
+  }
+  transitionModRequest(
+    serverId: string,
+    id: string,
+    from: string,
+    to: string,
+    error: string | null = null,
+  ) {
+    return (
+      this.db
+        .prepare(
+          "UPDATE mod_requests SET status=?, error=?, updated_at=? WHERE server_id=? AND id=? AND status=?",
+        )
+        .run(to, error, new Date().toISOString(), serverId, id, from)
+        .changes === 1
+    );
   }
 
   getAdmin(): { password_hash: string } | undefined {
@@ -204,21 +298,32 @@ export class Store {
     this.db.exec("DELETE FROM sessions");
   }
 
-  createSession(tokenHash: string, csrfToken: string, expiresAt: string) {
+  createSession(
+    tokenHash: string,
+    csrfToken: string,
+    expiresAt: string,
+    role: "admin" | "player" = "admin",
+  ) {
     const now = new Date().toISOString();
     this.db
       .prepare(
-        "INSERT INTO sessions(token_hash,csrf_token,expires_at,created_at) VALUES(?,?,?,?)",
+        "INSERT INTO sessions(token_hash,csrf_token,expires_at,created_at,role) VALUES(?,?,?,?,?)",
       )
-      .run(tokenHash, csrfToken, expiresAt, now);
+      .run(tokenHash, csrfToken, expiresAt, now, role);
   }
 
   getSession(
     tokenHash: string,
-  ): { csrf_token: string; expires_at: string } | undefined {
+  ):
+    | { csrf_token: string; expires_at: string; role: "admin" | "player" }
+    | undefined {
     return this.db
-      .prepare("SELECT csrf_token,expires_at FROM sessions WHERE token_hash=?")
-      .get(tokenHash) as { csrf_token: string; expires_at: string } | undefined;
+      .prepare(
+        "SELECT csrf_token,expires_at,role FROM sessions WHERE token_hash=?",
+      )
+      .get(tokenHash) as
+      | { csrf_token: string; expires_at: string; role: "admin" | "player" }
+      | undefined;
   }
 
   deleteSession(tokenHash: string) {
@@ -512,6 +617,17 @@ export class Store {
       }
       throw error;
     }
+  }
+
+  updatePublicAddress(id: string, address: string) {
+    this.db
+      .prepare(
+        `UPDATE servers SET
+      config_json=json_set(config_json, '$.publicAddress', ?),
+      applied_config_json=json_set(applied_config_json, '$.publicAddress', ?),
+      updated_at=? WHERE id=?`,
+      )
+      .run(address, address, new Date().toISOString(), id);
   }
 
   touchServerRevision(id: string) {
