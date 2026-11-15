@@ -53,12 +53,12 @@ export function normalizeRelativePath(input = ""): string {
     path.isAbsolute(input) ||
     Buffer.byteLength(input, "utf8") > maxPathLength
   ) {
-    throw new Error("Invalid file path");
+    throw httpError("Invalid file path", 400);
   }
   const normalized = input.replace(/\\/g, "/").replace(/^\.\/+/, "");
   const segments = normalized.split("/").filter(Boolean);
   if (segments.some((segment) => segment === "." || segment === "..")) {
-    throw new Error("Invalid file path");
+    throw httpError("Invalid file path", 400);
   }
   return segments.join("/");
 }
@@ -73,7 +73,7 @@ function validateLeafName(input: string): string {
     /[\0-\x1f\x7f]/.test(input) ||
     Buffer.byteLength(input, "utf8") > maxNameLength
   ) {
-    throw new Error("Invalid file name");
+    throw httpError("Invalid file name", 400);
   }
   return input;
 }
@@ -82,7 +82,9 @@ function isInside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return (
     relative === "" ||
-    (!relative.startsWith("..") && !path.isAbsolute(relative))
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
   );
 }
 
@@ -90,19 +92,19 @@ export async function resolveExisting(root: string, input = "") {
   await mkdir(root, { recursive: true });
   const relative = normalizeRelativePath(input);
   const rootInfo = await lstat(root);
-  if (rootInfo.isSymbolicLink()) throw new Error("Invalid file path");
+  if (rootInfo.isSymbolicLink()) throw httpError("Invalid file path", 400);
   const resolvedRoot = await realpath(root);
   let cursor = resolvedRoot;
   try {
     for (const segment of relative.split("/").filter(Boolean)) {
       cursor = path.join(cursor, segment);
       if ((await lstat(cursor)).isSymbolicLink()) {
-        throw new Error("Invalid file path");
+        throw httpError("Invalid file path", 400);
       }
     }
     const resolvedTarget = await realpath(cursor);
     if (!isInside(resolvedRoot, resolvedTarget)) {
-      throw new Error("Invalid file path");
+      throw httpError("Invalid file path", 400);
     }
     return { root: resolvedRoot, relative, target: resolvedTarget };
   } catch (error: any) {
@@ -113,7 +115,7 @@ export async function resolveExisting(root: string, input = "") {
 
 async function resolveNewLeaf(root: string, input: string) {
   const relative = normalizeRelativePath(input);
-  if (!relative) throw new Error("The server data root cannot be changed");
+  if (!relative) throw httpError("The server data root cannot be changed", 400);
   const segments = relative.split("/");
   const leaf = validateLeafName(segments.pop()!);
   const parentRelative = segments.join("/");
@@ -121,7 +123,7 @@ async function resolveNewLeaf(root: string, input: string) {
   const parentInfo = await stat(parent.target);
   if (!parentInfo.isDirectory()) throw httpError("Folder not found", 404);
   const target = path.join(parent.target, leaf);
-  if (!isInside(parent.root, target)) throw new Error("Invalid file path");
+  if (!isInside(parent.root, target)) throw httpError("Invalid file path", 400);
   try {
     await lstat(target);
     throw httpError("A file or folder with that name already exists", 409);
@@ -153,7 +155,8 @@ async function describeEntry(
   const info = await stat(target);
   const name = path.basename(relative);
   const isDirectory = info.isDirectory();
-  if (!isDirectory && !info.isFile()) throw new Error("Unsupported file type");
+  if (!isDirectory && !info.isFile())
+    throw httpError("Unsupported file type", 400);
   return {
     name,
     path: relative,
@@ -238,19 +241,20 @@ export async function readServerFile(
   const info = await stat(target);
   if (!info.isFile()) throw httpError("File not found", 404);
   if (!isEditableFilename(relative)) {
-    throw new Error("This file type cannot be edited");
+    throw httpError("This file type cannot be edited", 400);
   }
   if (info.size > maxBytes) {
-    throw new Error("File is too large to edit in the browser");
+    throw httpError("File is too large to edit in the browser", 400);
   }
   const buffer = await readFile(target);
   let content: string;
   try {
     content = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
   } catch {
-    throw new Error("File is not valid UTF-8 text");
+    throw httpError("File is not valid UTF-8 text", 400);
   }
-  if (content.includes("\0")) throw new Error("Binary files cannot be edited");
+  if (content.includes("\0"))
+    throw httpError("Binary files cannot be edited", 400);
   return {
     path: relative,
     content,
@@ -263,21 +267,21 @@ export async function writeServerFile(
   root: string,
   requestedPath: string,
   content: string,
-  expectedModifiedAt: string | undefined,
+  expectedModifiedAt: string,
   maxBytes: number,
 ): Promise<ServerFileDocument> {
   const { relative, target } = await resolveExisting(root, requestedPath);
   const info = await stat(target);
   if (!info.isFile()) throw httpError("File not found", 404);
   if (!isEditableFilename(relative)) {
-    throw new Error("This file type cannot be edited");
+    throw httpError("This file type cannot be edited", 400);
   }
-  if (expectedModifiedAt && info.mtime.toISOString() !== expectedModifiedAt) {
+  if (info.mtime.toISOString() !== expectedModifiedAt) {
     throw httpError("File changed on disk. Reload it before saving.", 409);
   }
   const bytes = Buffer.byteLength(content, "utf8");
   if (bytes > maxBytes) {
-    throw new Error("File is too large to edit in the browser");
+    throw httpError("File is too large to edit in the browser", 400);
   }
 
   const temporary = path.join(
@@ -398,7 +402,7 @@ export async function serverFileDownload(
 ): Promise<{ filename: string; size: number; stream: ReadStream }> {
   const { relative, target } = await resolveExisting(root, requestedPath);
   const info = await stat(target);
-  if (!info.isFile()) throw new Error("Only files can be downloaded");
+  if (!info.isFile()) throw httpError("Only files can be downloaded", 400);
   return {
     filename: path.basename(relative),
     size: info.size,
@@ -412,21 +416,22 @@ export async function moveServerFileEntry(
   destinationPath: string,
 ): Promise<ServerFileEntry> {
   const source = await resolveExisting(root, sourcePath);
-  if (!source.relative) throw new Error("The server data root cannot be moved");
+  if (!source.relative)
+    throw httpError("The server data root cannot be moved", 400);
   const destinationRelative = normalizeRelativePath(destinationPath);
-  if (!destinationRelative) throw new Error("Invalid destination path");
+  if (!destinationRelative) throw httpError("Invalid destination path", 400);
   if (source.relative === destinationRelative) {
     throw httpError("Source and destination are the same", 409);
   }
   const sourceInfo = await stat(source.target);
   if (!sourceInfo.isFile() && !sourceInfo.isDirectory()) {
-    throw new Error("Unsupported file type");
+    throw httpError("Unsupported file type", 400);
   }
   if (
     sourceInfo.isDirectory() &&
     destinationRelative.startsWith(`${source.relative}/`)
   ) {
-    throw new Error("A folder cannot be moved into itself");
+    throw httpError("A folder cannot be moved into itself", 400);
   }
   const destination = await resolveNewLeaf(root, destinationRelative);
   await rename(source.target, destination.target);
@@ -440,10 +445,10 @@ export async function deleteServerFileEntry(
 ): Promise<void> {
   const resolved = await resolveExisting(root, requestedPath);
   if (!resolved.relative)
-    throw new Error("The server data root cannot be deleted");
+    throw httpError("The server data root cannot be deleted", 400);
   const info = await stat(resolved.target);
   if (!info.isFile() && !info.isDirectory())
-    throw new Error("Unsupported file type");
+    throw httpError("Unsupported file type", 400);
   if (expectedModifiedAt && info.mtime.toISOString() !== expectedModifiedAt) {
     throw httpError(
       "File or folder changed on disk. Refresh and try again.",

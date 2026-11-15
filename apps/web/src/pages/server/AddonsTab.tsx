@@ -158,6 +158,8 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
   }
 
   async function remove(file: AddonFile) {
+    // Close first so a double-click on Confirm cannot send two deletes.
+    setPendingDelete(null);
     try {
       await api(
         `/api/servers/${server.id}/addons/${encodeURIComponent(file.name)}`,
@@ -165,7 +167,6 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
           method: "DELETE",
         },
       );
-      setPendingDelete(null);
       await load();
     } catch (error) {
       setError(

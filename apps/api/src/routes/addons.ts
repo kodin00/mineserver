@@ -17,7 +17,7 @@ import { instancePaths } from "../compose.js";
 import { config } from "../config.js";
 import type { AppContext } from "../app.js";
 import { enforceTotalLimit, requireServer, rowConfig } from "../helpers.js";
-import { safeFilename } from "../utils.js";
+import { httpError, safeFilename } from "../utils.js";
 
 export async function addonsRoutes(
   app: FastifyInstance,
@@ -46,7 +46,10 @@ export async function addonsRoutes(
       const row = requireServer(store, request.params.id);
       const kind = addonKind(rowConfig(row).type);
       if (!kind)
-        throw new Error("This server type does not support managed add-ons");
+        throw httpError(
+          "This server type does not support managed add-ons",
+          400,
+        );
       const uploads: Array<{ path: string; originalName: string }> = [];
       const limit = enforceTotalLimit();
       try {
@@ -55,10 +58,10 @@ export async function addonsRoutes(
           uploads.push({ path: temp.path, originalName: file.filename });
           await pipeline(file.file, limit(), temp.stream);
           if (file.file.truncated)
-            throw new Error("Upload exceeds the configured size limit");
+            throw httpError("Upload exceeds the configured size limit", 400);
         }
         if (uploads.length === 0)
-          throw new Error("Choose one or more JAR or ZIP files");
+          throw httpError("Choose one or more JAR or ZIP files", 400);
         const invalid = uploads.find(
           (upload) =>
             ![".jar", ".zip"].includes(
@@ -66,8 +69,9 @@ export async function addonsRoutes(
             ),
         );
         if (invalid)
-          throw new Error(
+          throw httpError(
             `Only JAR and ZIP uploads are accepted: ${invalid.originalName}`,
+            400,
           );
         const directory = instancePaths(config.instancesRoot, row.id).addons;
         const installed = await jobs.mutations.runExclusive(
@@ -94,7 +98,10 @@ export async function addonsRoutes(
       const row = requireServer(store, request.params.id);
       const kind = addonKind(rowConfig(row).type);
       if (!kind)
-        throw new Error("This server type does not support managed add-ons");
+        throw httpError(
+          "This server type does not support managed add-ons",
+          400,
+        );
       const directory = instancePaths(config.instancesRoot, row.id).addons;
       const archive = await createAddonsArchive(directory);
       reply.header(
@@ -110,9 +117,7 @@ export async function addonsRoutes(
     "/api/servers/:id/addons/:filename/download",
     async (request, reply) => {
       const row = requireServer(store, request.params.id);
-      const filename = safeFilename(
-        decodeURIComponent(request.params.filename),
-      );
+      const filename = safeFilename(request.params.filename);
       const target = await addonFilePath(
         instancePaths(config.instancesRoot, row.id).addons,
         filename,
@@ -136,7 +141,7 @@ export async function addonsRoutes(
     return jobs.mutations.runExclusive(row.id, "addon-toggle", async () => {
       await setAddonEnabled(
         instancePaths(config.instancesRoot, row.id).addons,
-        decodeURIComponent(request.params.filename),
+        request.params.filename,
         enabled,
       );
       store.touchServerRevision(row.id);
@@ -148,13 +153,13 @@ export async function addonsRoutes(
     Params: { id: string; filename: string };
   }>("/api/servers/:id/addons/:filename", async (request) => {
     const row = requireServer(store, request.params.id);
-    const filename = decodeURIComponent(request.params.filename);
+    const filename = request.params.filename;
     return jobs.mutations.runExclusive(row.id, "addon-delete", async () => {
       await removeAddon(
         instancePaths(config.instancesRoot, row.id).addons,
         filename,
       );
-      store.deleteAddonSource(row.id, filename);
+      store.deleteAddonSource(row.id, filename, null);
       store.touchServerRevision(row.id);
       return { ok: true, restartRequired: true };
     });

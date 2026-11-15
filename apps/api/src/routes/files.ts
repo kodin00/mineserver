@@ -22,6 +22,7 @@ import { instancePaths } from "../compose.js";
 import { config } from "../config.js";
 import type { AppContext } from "../app.js";
 import { enforceTotalLimit, requireServer } from "../helpers.js";
+import { httpError } from "../utils.js";
 
 export async function filesRoutes(
   app: FastifyInstance,
@@ -46,7 +47,8 @@ export async function filesRoutes(
   }>("/api/servers/:id/files/search", async (request) => {
     const row = requireServer(store, request.params.id);
     const query = request.query.q?.trim() ?? "";
-    if (!query || query.length > 200) throw new Error("Invalid search query");
+    if (!query || query.length > 200)
+      throw httpError("Invalid search query", 400);
     return searchServerFiles(
       instancePaths(config.instancesRoot, row.id).data,
       query,
@@ -58,7 +60,7 @@ export async function filesRoutes(
     Querystring: { path?: string };
   }>("/api/servers/:id/files/download", async (request, reply) => {
     const row = requireServer(store, request.params.id);
-    if (!request.query.path) throw new Error("File path is required");
+    if (!request.query.path) throw httpError("File path is required", 400);
     const download = await serverFileDownload(
       instancePaths(config.instancesRoot, row.id).data,
       request.query.path,
@@ -110,7 +112,8 @@ export async function filesRoutes(
             { statusCode: 413 },
           );
       }
-      if (uploads.length === 0) throw new Error("Choose one or more files");
+      if (uploads.length === 0)
+        throw httpError("Choose one or more files", 400);
       const files = await jobs.mutations.runExclusive(
         row.id,
         "file-upload",
@@ -167,7 +170,7 @@ export async function filesRoutes(
     Querystring: { path?: string };
   }>("/api/servers/:id/files/content", async (request) => {
     const row = requireServer(store, request.params.id);
-    if (!request.query.path) throw new Error("File path is required");
+    if (!request.query.path) throw httpError("File path is required", 400);
     return readServerFile(
       instancePaths(config.instancesRoot, row.id).data,
       request.query.path,
@@ -188,10 +191,16 @@ export async function filesRoutes(
     if (
       typeof filePath !== "string" ||
       typeof content !== "string" ||
-      (expectedModifiedAt !== undefined &&
-        typeof expectedModifiedAt !== "string")
+      typeof expectedModifiedAt !== "string" ||
+      expectedModifiedAt === ""
     ) {
-      throw new Error("Invalid file update");
+      // Required so a save can never silently overwrite a concurrent edit.
+      // This endpoint only updates existing files (new files are created with
+      // POST /files), so a prior modification time always exists.
+      throw httpError(
+        "expectedModifiedAt is required; reload the file and try again",
+        400,
+      );
     }
     return jobs.mutations.runExclusive(row.id, "file-write", () =>
       writeServerFile(

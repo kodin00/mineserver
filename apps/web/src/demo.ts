@@ -1,4 +1,11 @@
-import { ServerConfigSchema, type Operation } from "@mineserver/shared";
+import {
+  ServerConfigSchema,
+  addonKind,
+  type BackupFile,
+  type Operation,
+  type ServerFileEntry,
+  type WorldInfo,
+} from "@mineserver/shared";
 
 // Demo data lives only in this page's memory. No request falls through to fetch.
 type Role = "admin" | "player";
@@ -87,6 +94,126 @@ const projects = [
     description: "Shared building blocks for Fabric mods.",
   },
 ];
+
+type DemoFile = { content: string | null; size: number; editable: boolean };
+const modifiedAt = "2026-10-30T18:30:00.000Z";
+const propertiesText = (motd: string, port: number) =>
+  `#Minecraft server properties\nmotd=${motd}\nserver-port=${port}\ndifficulty=normal\ngamemode=survival\nmax-players=20\nview-distance=10\nwhite-list=true\n`;
+const textFile = (content: string): DemoFile => ({
+  content,
+  size: new TextEncoder().encode(content).length,
+  editable: true,
+});
+const binaryFile = (size: number): DemoFile => ({
+  content: null,
+  size,
+  editable: false,
+});
+// Read-only sample file tree per server; directories are inferred from paths.
+const sampleFiles = (server: { config: { name: string; port: number } }) =>
+  new Map<string, DemoFile>([
+    [
+      "server.properties",
+      textFile(propertiesText(server.config.name, server.config.port)),
+    ],
+    [
+      "ops.json",
+      textFile('[\n  {\n    "name": "Alex",\n    "level": 4\n  }\n]\n'),
+    ],
+    [
+      "whitelist.json",
+      textFile(
+        '[\n  { "name": "Alex" },\n  { "name": "Steve" },\n  { "name": "Sam" }\n]\n',
+      ),
+    ],
+    [
+      "config/lithium.properties",
+      textFile("mixin.gen.chunk_tick=true\nmixin.ai.pathing=true\n"),
+    ],
+    [
+      "config/ferrite-core.mixin.properties",
+      textFile("replaceNeighborLookup=true\n"),
+    ],
+    [
+      "logs/latest.log",
+      textFile(
+        '[12:00:00] [Server thread/INFO]: Starting minecraft server version 1.21.4\n[12:00:09] [Server thread/INFO]: Done (8.2s)! For help, type "help"\n',
+      ),
+    ],
+    ["mods/fabric-api.jar", binaryFile(2_400_000)],
+    ["mods/lithium.jar", binaryFile(780_000)],
+    ["world/level.dat", binaryFile(2_048)],
+    ["world/region/r.0.0.mca", binaryFile(4_194_304)],
+  ]);
+const filesByServer = new Map(servers.map((s) => [s.id, sampleFiles(s)]));
+const backupsByServer: Record<string, BackupFile[]> = {
+  survival: [
+    {
+      name: "survival-2026-11-01-0400.tar.gz",
+      size: 184_549_376,
+      createdAt: "2026-11-01T04:00:00.000Z",
+    },
+    {
+      name: "survival-2026-10-31-0400.tar.gz",
+      size: 181_403_648,
+      createdAt: "2026-10-31T04:00:00.000Z",
+    },
+    {
+      name: "survival-2026-10-30-0400.tar.gz",
+      size: 176_160_768,
+      createdAt: "2026-10-30T04:00:00.000Z",
+    },
+  ],
+  creative: [
+    {
+      name: "creative-2026-10-28-0400.tar.gz",
+      size: 52_428_800,
+      createdAt: "2026-10-28T04:00:00.000Z",
+    },
+  ],
+};
+function listFolder(
+  files: Map<string, DemoFile>,
+  folder: string,
+): ServerFileEntry[] {
+  const prefix = folder ? `${folder}/` : "";
+  const found = new Map<string, ServerFileEntry>();
+  for (const [path, file] of files) {
+    if (!path.startsWith(prefix)) continue;
+    const [name, ...rest] = path.slice(prefix.length).split("/");
+    if (!name) continue;
+    const entryPath = `${prefix}${name}`;
+    found.set(
+      entryPath,
+      rest.length
+        ? {
+            name,
+            path: entryPath,
+            type: "directory",
+            size: null,
+            modifiedAt,
+            editable: false,
+          }
+        : {
+            name,
+            path: entryPath,
+            type: "file",
+            size: file.size,
+            modifiedAt,
+            editable: file.editable,
+          },
+    );
+  }
+  return [...found.values()].sort((a, b) =>
+    a.type === b.type
+      ? a.name.localeCompare(b.name)
+      : a.type === "directory"
+        ? -1
+        : 1,
+  );
+}
+const unavailable = (what = "This action") =>
+  error(`${what} is not available in the demo.`);
 
 function result(data: unknown, status = 200): Response {
   return new Response(status === 204 ? null : JSON.stringify(data), {
@@ -257,6 +384,48 @@ export async function demoFetch(
     }
     return result({});
   }
+  if (suffix === "world" && method === "GET") {
+    const info: WorldInfo = {
+      levelName: "world",
+      exists: true,
+      size: 268_435_456,
+      modifiedAt,
+      serverState: server.state,
+      canImport: server.state === "stopped",
+    };
+    return result(info);
+  }
+  if (suffix === "backups" && method === "GET")
+    return result(backupsByServer[server.id] ?? []);
+  const files = filesByServer.get(server.id) ?? new Map<string, DemoFile>();
+  if (suffix === "files" && method === "GET")
+    return result(listFolder(files, url.searchParams.get("path") ?? ""));
+  if (suffix === "files/search" && method === "GET") {
+    const query = (url.searchParams.get("q") ?? "").toLowerCase();
+    const matches = new Map<string, ServerFileEntry>();
+    for (const path of files.keys()) {
+      const parts = path.split("/");
+      parts.forEach((_, index) => {
+        const entryPath = parts.slice(0, index + 1).join("/");
+        const entry = listFolder(files, parts.slice(0, index).join("/")).find(
+          (item) => item.path === entryPath,
+        );
+        if (entry && entry.name.toLowerCase().includes(query))
+          matches.set(entryPath, entry);
+      });
+    }
+    return result([...matches.values()]);
+  }
+  if (suffix === "files/content" && method === "GET") {
+    const path = url.searchParams.get("path") ?? "";
+    const file = files.get(path);
+    if (!file || file.content === null) return error("File not found.", 404);
+    return result({ path, content: file.content, size: file.size, modifiedAt });
+  }
+  if (suffix === "files/content" || suffix.startsWith("files"))
+    return unavailable("Changing files");
+  if (suffix.startsWith("players/") || suffix.startsWith("whitelist/"))
+    return unavailable("Managing players");
   if (suffix === "logs" && method === "GET")
     return result({
       logs: '[12:00:00] [Server thread/INFO]: Done! For help, type "help"',
@@ -283,6 +452,7 @@ export async function demoFetch(
     });
   if ((suffix === "addons" || suffix === "datapacks") && method === "GET")
     return result({
+      kind: addonKind(server.config.type),
       files: installed
         .filter((item) => item.serverId === server.id)
         .map((item) => ({
@@ -408,5 +578,5 @@ export async function demoFetch(
     }
     return result(request);
   }
-  return error("This action is unavailable in the demo.");
+  return unavailable();
 }

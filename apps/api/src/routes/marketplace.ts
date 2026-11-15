@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { httpError } from "../utils.js";
 import {
   MarketplaceSettingsSchema,
   ModrinthInstallSchema,
@@ -26,6 +27,11 @@ import {
   runInstall,
   runUpdate,
 } from "../marketplace.js";
+
+/** Upper bound on unreviewed player requests per server. */
+export const MAX_PENDING_MOD_REQUESTS_PER_SERVER = 10;
+const PLAYER_VISIBLE_REQUEST_ERROR =
+  "The installation failed. Ask an administrator for details.";
 
 export async function marketplaceRoutes(
   app: FastifyInstance,
@@ -99,11 +105,12 @@ export async function marketplaceRoutes(
 
   const idOrSlugPattern = /^[A-Za-z0-9._-]{1,64}$/;
   function marketplaceId(value: string): string {
-    const decoded = decodeURIComponent(value);
-    if (!idOrSlugPattern.test(decoded)) {
-      throw new Error("Invalid marketplace project id");
+    // Fastify has already percent-decoded the route parameter; decoding it a
+    // second time would let "%252F" turn into "/" after the pattern check.
+    if (!idOrSlugPattern.test(value)) {
+      throw httpError("Invalid marketplace project id", 400);
     }
-    return decoded;
+    return value;
   }
 
   app.get(
@@ -124,8 +131,9 @@ export async function marketplaceRoutes(
       if (
         !supportedMarketplaceTypes(query.serverType).includes(query.projectType)
       ) {
-        throw new Error(
+        throw httpError(
           `A ${query.serverType} server cannot use ${query.projectType} content`,
+          400,
         );
       }
       return modrinth.search({
@@ -191,7 +199,10 @@ export async function marketplaceRoutes(
           version.id === item.versionId && version.projectId === item.projectId,
       )
     )
-      throw new Error("Selected version is not compatible with this server");
+      throw httpError(
+        "Selected version is not compatible with this server",
+        400,
+      );
   }
 
   const requestItem = z.object({
@@ -199,12 +210,31 @@ export async function marketplaceRoutes(
     versionId: z.string().regex(/^[A-Za-z0-9]{8}$/),
     projectType: z.enum(["mod", "plugin", "datapack"]),
   });
+  const assertPendingCapacity = (serverId: string) => {
+    if (
+      store.countModRequests(serverId, "pending") >=
+      MAX_PENDING_MOD_REQUESTS_PER_SERVER
+    )
+      throw httpError(
+        `This server already has ${MAX_PENDING_MOD_REQUESTS_PER_SERVER} pending mod requests. Wait for an administrator to review them before sending more.`,
+        429,
+      );
+  };
   type RequestParams = { id: string; requestId: string };
   app.get<{ Params: { id: string } }>(
     "/api/servers/:id/mod-requests",
     async (request) => {
       requireServer(store, request.params.id);
-      return { requests: store.listModRequests(request.params.id) };
+      const requests = store.listModRequests(request.params.id);
+      if (request.session?.role === "admin") return { requests };
+      // Stored errors can contain filesystem paths and other internals; players
+      // only learn that the request failed.
+      return {
+        requests: requests.map((entry) => ({
+          ...entry,
+          error: entry.error ? PLAYER_VISIBLE_REQUEST_ERROR : entry.error,
+        })),
+      };
     },
   );
   app.post<{ Params: { id: string } }>(
@@ -220,15 +250,17 @@ export async function marketplaceRoutes(
         new Set(body.items.map((item) => item.projectId)).size !==
         body.items.length
       )
-        throw new Error("Each project may only appear once");
+        throw httpError("Each project may only appear once", 400);
+      assertPendingCapacity(row.id);
       const items = [];
       for (const item of body.items) {
         assertInstallable(rowConfig(row), item.projectType);
         await verifyRequestedVersion(row, item);
         const preview = await buildPreview(marketplaceContext(row), item);
         if (preview.primary.projectId !== item.projectId)
-          throw new Error(
+          throw httpError(
             "Selected version does not belong to the requested project",
+            400,
           );
         items.push({
           ...item,
@@ -236,6 +268,9 @@ export async function marketplaceRoutes(
           versionNumber: preview.primary.versionNumber,
         });
       }
+      // Re-check right before the insert: the awaits above let concurrent
+      // submissions pass the first check.
+      assertPendingCapacity(row.id);
       return reply.code(201).send(store.createModRequest(row.id, items));
     },
   );
@@ -294,8 +329,9 @@ export async function marketplaceRoutes(
               await verifyRequestedVersion(requireServer(store, row.id), item);
               const preview = await buildPreview(ctx, item);
               if (preview.primary.projectId !== item.projectId)
-                throw new Error(
+                throw httpError(
                   "Selected version does not belong to the requested project",
+                  400,
                 );
             }
             for (const item of items) {

@@ -21,10 +21,12 @@ cd mineserver
 curl -fsSLo compose.yaml "$repo_url/compose.yaml"
 curl -fsSLo .env.example "$repo_url/.env.example"
 [ -f .env ] || cp .env.example .env
+# .env holds the admin password; keep it private to the installing user.
+chmod 600 .env
 
 # Replace the publicly documented example password with a generated one unless
 # the user already provided their own before running the installer.
-if grep -q '^ADMIN_PASSWORD=mineserver123!' .env; then
+if grep -qxF 'ADMIN_PASSWORD=mineserver123!' .env; then
   generated_password="$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')"
   sed -i.bak "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=$generated_password|" .env
   rm -f .env.bak
@@ -37,6 +39,11 @@ data_root="$(grep '^MINESERVER_DATA_ROOT=' .env | cut -d= -f2- || true)"
 if [ "$(id -u)" -eq 0 ]; then
   mkdir -p "$data_root"
 else
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "Error: creating $data_root requires root privileges, but 'sudo' is not installed." >&2
+    echo "Run this installer as root, or install sudo and re-run it." >&2
+    exit 1
+  fi
   sudo mkdir -p "$data_root"
 fi
 docker compose pull

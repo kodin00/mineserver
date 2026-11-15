@@ -697,6 +697,10 @@ export class ModrinthClient implements ModrinthApi {
         throw httpError("Downloaded file failed its integrity check", 502);
       }
     } catch (error) {
+      // Early failures (bad URL, redirect, size mismatch) never reach the
+      // pipeline, which is what normally closes the stream, so close it here
+      // rather than leaking the open file descriptor.
+      (temp.stream as { destroy?: () => void }).destroy?.();
       await rm(temp.path, { force: true }).catch(() => undefined);
       throw error;
     }

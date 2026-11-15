@@ -14,7 +14,7 @@ import yauzl, { type Entry, type ZipFile } from "yauzl";
 import { ZipArchive } from "archiver";
 import type { AddonFile } from "@mineserver/shared";
 import { config } from "./config.js";
-import { pathExists, safeFilename } from "./utils.js";
+import { httpError, pathExists, safeFilename } from "./utils.js";
 
 const containerReadableMode = 0o644;
 
@@ -70,11 +70,11 @@ export async function installJar(
 ) {
   const filename = safeFilename(path.basename(originalName));
   if (!filename.toLowerCase().endsWith(".jar"))
-    throw new Error("Only .jar files are accepted");
+    throw httpError("Only .jar files are accepted", 400);
   await mkdir(directory, { recursive: true });
   const target = path.join(directory, filename);
   if (await addonNameExists(directory, filename)) {
-    throw new Error(`An add-on named ${filename} already exists`);
+    throw httpError(`An add-on named ${filename} already exists`, 400);
   }
   await rename(tempPath, target);
   try {
@@ -117,7 +117,8 @@ function openZip(filename: string): Promise<ZipFile> {
       filename,
       { lazyEntries: true, autoClose: true },
       (error, zip) => {
-        if (error || !zip) reject(error ?? new Error("Unable to open ZIP"));
+        if (error || !zip)
+          reject(httpError(error?.message ?? "Unable to open ZIP", 400));
         else resolve(zip);
       },
     );
@@ -131,7 +132,7 @@ function entryStream(
   return new Promise((resolve, reject) => {
     zip.openReadStream(entry, (error, stream) => {
       if (error || !stream)
-        reject(error ?? new Error("Unable to read ZIP entry"));
+        reject(httpError(error?.message ?? "Unable to read ZIP entry", 400));
       else resolve(stream);
     });
   });
@@ -162,7 +163,7 @@ export async function installZip(
             segments.includes("..") ||
             /^[A-Za-z]:/.test(normalized)
           ) {
-            throw new Error(`Unsafe ZIP path: ${entry.fileName}`);
+            throw httpError(`Unsafe ZIP path: ${entry.fileName}`, 400);
           }
           if (normalized.endsWith("/")) {
             zip.readEntry();
@@ -174,21 +175,24 @@ export async function installZip(
             return;
           }
           if (!leaf.toLowerCase().endsWith(".jar")) {
-            throw new Error(`ZIP contains a non-JAR file: ${entry.fileName}`);
+            throw httpError(
+              `ZIP contains a non-JAR file: ${entry.fileName}`,
+              400,
+            );
           }
           count += 1;
           expanded += entry.uncompressedSize;
           if (count > config.MAX_ZIP_FILES)
-            throw new Error("ZIP contains too many files");
+            throw httpError("ZIP contains too many files", 400);
           if (expanded > config.MAX_ZIP_EXPANDED_BYTES)
-            throw new Error("ZIP expands beyond the configured limit");
+            throw httpError("ZIP expands beyond the configured limit", 400);
           if (
             extracted.some((name) => name.toLowerCase() === leaf.toLowerCase())
           ) {
-            throw new Error(`ZIP contains duplicate filename: ${leaf}`);
+            throw httpError(`ZIP contains duplicate filename: ${leaf}`, 400);
           }
           if (await addonNameExists(directory, leaf)) {
-            throw new Error(`An add-on named ${leaf} already exists`);
+            throw httpError(`An add-on named ${leaf} already exists`, 400);
           }
           const stream = await entryStream(zip, entry);
           const target = path.join(staging, leaf);
@@ -206,7 +210,8 @@ export async function installZip(
       zip.readEntry();
     });
 
-    if (extracted.length === 0) throw new Error("ZIP contains no JAR files");
+    if (extracted.length === 0)
+      throw httpError("ZIP contains no JAR files", 400);
     const moved: string[] = [];
     try {
       for (const filename of extracted) {
@@ -237,7 +242,7 @@ export async function removeAddon(directory: string, filename: string) {
   const disabled = path.join(directory, `${safe}.disabled`);
   if (await pathExists(enabled)) await rm(enabled);
   else if (await pathExists(disabled)) await rm(disabled);
-  else throw new Error("Add-on not found");
+  else throw httpError("Add-on not found", 404);
 }
 
 export async function setAddonEnabled(
@@ -249,7 +254,7 @@ export async function setAddonEnabled(
   const from = path.join(directory, enabled ? `${safe}.disabled` : safe);
   const to = path.join(directory, enabled ? safe : `${safe}.disabled`);
   if (!(await pathExists(from)))
-    throw new Error("Add-on not found or already in requested state");
+    throw httpError("Add-on not found or already in requested state", 404);
   await rename(from, to);
 }
 
@@ -259,17 +264,17 @@ export async function addonFilePath(
 ): Promise<string> {
   const safe = safeFilename(filename);
   if (!safe.toLowerCase().endsWith(".jar"))
-    throw new Error("Invalid add-on file");
+    throw httpError("Invalid add-on file", 400);
   const enabled = path.join(directory, safe);
   const disabled = path.join(directory, `${safe}.disabled`);
   if (await pathExists(enabled)) return enabled;
   if (await pathExists(disabled)) return disabled;
-  throw new Error("Add-on not found");
+  throw httpError("Add-on not found", 404);
 }
 
 export async function createAddonsArchive(directory: string) {
   const files = await listAddons(directory);
-  if (files.length === 0) throw new Error("No add-ons to download");
+  if (files.length === 0) throw httpError("No add-ons to download", 400);
   const archive = new ZipArchive({ zlib: { level: 6 } });
   archive.on("warning", (error) => {
     if (error.code !== "ENOENT") archive.destroy(error);

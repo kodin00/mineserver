@@ -355,6 +355,7 @@ export function BrowseTab({
           <label className="input-with-icon file-search">
             <Search size={16} />
             <input
+              aria-label="Search Modrinth"
               value={query}
               placeholder="Search Modrinth…"
               onChange={(event) => {
@@ -366,7 +367,11 @@ export function BrowseTab({
               }}
             />
           </label>
-          <div className="browse-type-switcher" role="group">
+          <div
+            className="browse-type-switcher"
+            role="group"
+            aria-label="Content type"
+          >
             {allowedTypes.map((type) => (
               <button
                 key={type}

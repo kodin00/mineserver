@@ -6,6 +6,7 @@ import { WorldImportSchema } from "@mineserver/shared";
 import { createTempUpload } from "../addons.js";
 import { instancePaths } from "../compose.js";
 import { config } from "../config.js";
+import { httpError } from "../utils.js";
 import type { AppContext } from "../app.js";
 import { enforceTotalLimit, requireServer, rowConfig } from "../helpers.js";
 import { resolveLevelName } from "../datapacks.js";
@@ -104,9 +105,9 @@ export async function worldsRoutes(
       try {
         for await (const part of request.parts()) {
           if (part.type === "file") {
-            if (upload) throw new Error("Choose exactly one world ZIP");
+            if (upload) throw httpError("Choose exactly one world ZIP", 400);
             if (!part.filename.toLowerCase().endsWith(".zip")) {
-              throw new Error("Only ZIP world archives are accepted");
+              throw httpError("Only ZIP world archives are accepted", 400);
             }
             const temp = await createTempUpload(config.tempRoot);
             upload = { path: temp.path };
@@ -121,7 +122,7 @@ export async function worldsRoutes(
             fields[part.fieldname] = String(part.value);
           }
         }
-        if (!upload) throw new Error("Choose a world ZIP to import");
+        if (!upload) throw httpError("Choose a world ZIP to import", 400);
         const body = WorldImportSchema.parse({
           acknowledgeLevelName: fields.acknowledgeLevelName,
           overwrite: fields.overwrite === "true",

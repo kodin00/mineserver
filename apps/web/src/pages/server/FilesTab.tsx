@@ -29,7 +29,7 @@ import type {
   ServerFileEntry,
   ServerSummary,
 } from "@mineserver/shared";
-import { api, formatBytes, jsonBody } from "../../api";
+import { api, formatBytes, isDemo, jsonBody } from "../../api";
 import { ErrorBanner } from "../../components/Layout";
 
 function queryPath(path: string): string {
@@ -51,7 +51,21 @@ type DialogState =
   | { kind: "delete"; entry: ServerFileEntry }
   | null;
 
-type DeferredAction = (() => void | Promise<void>) | null;
+// "replace": the action swaps the open document for something else, so the
+// draft goes with it. "remove": the action may delete the open document later
+// (after its own confirmation), so Discard only reverts the draft for now.
+type DeferredAction = {
+  run: () => void | Promise<void>;
+  mode: "replace" | "remove";
+} | null;
+
+// A bare `open` attribute renders a non-modal dialog (no backdrop, no focus
+// containment, Escape never reaches onCancel), so drive showModal() instead.
+function syncModal(element: HTMLDialogElement | null, open: boolean) {
+  if (!element) return;
+  if (open && !element.open) element.showModal();
+  if (!open && element.open) element.close();
+}
 
 export function FilesTab({ server }: { server: ServerSummary }) {
   const [currentPath, setCurrentPath] = useState("");
@@ -170,9 +184,20 @@ export function FilesTab({ server }: { server: ServerSummary }) {
     }));
   }, [currentPath]);
 
-  function afterDirty(action: () => void | Promise<void>) {
-    if (dirty) setDirtyAction(() => action);
+  function afterDirty(
+    action: () => void | Promise<void>,
+    mode: "replace" | "remove" = "replace",
+  ) {
+    if (dirty) setDirtyAction({ run: action, mode });
     else void action();
+  }
+
+  function touchesOpenDocument(entry: ServerFileEntry) {
+    return (
+      openDocument !== null &&
+      (openDocument.path === entry.path ||
+        openDocument.path.startsWith(`${entry.path}/`))
+    );
   }
 
   async function openFile(entry: ServerFileEntry) {
@@ -287,6 +312,8 @@ export function FilesTab({ server }: { server: ServerSummary }) {
       (dialog.kind !== "create-file" && dialog.kind !== "create-folder")
     )
       return;
+    // Enter in the name field bypasses the disabled button, so guard here.
+    if (busy || !dialogValue.trim()) return;
     setBusy(true);
     try {
       await api(`/api/servers/${server.id}/files`, {
@@ -311,6 +338,7 @@ export function FilesTab({ server }: { server: ServerSummary }) {
 
   async function moveOrRename() {
     if (!dialog || (dialog.kind !== "rename" && dialog.kind !== "move")) return;
+    if (busy || (dialog.kind === "rename" && !dialogValue.trim())) return;
     const entry = dialog.entry;
     const destination =
       dialog.kind === "rename"
@@ -346,7 +374,7 @@ export function FilesTab({ server }: { server: ServerSummary }) {
   }
 
   async function deleteEntry() {
-    if (dialog?.kind !== "delete") return;
+    if (dialog?.kind !== "delete" || busy) return;
     const entry = dialog.entry;
     setBusy(true);
     try {
@@ -378,7 +406,7 @@ export function FilesTab({ server }: { server: ServerSummary }) {
   }
 
   async function upload(files: File[]) {
-    if (!files.length) return;
+    if (!files.length || busy) return;
     setBusy(true);
     try {
       const body = new FormData();
@@ -393,13 +421,14 @@ export function FilesTab({ server }: { server: ServerSummary }) {
       setNotice(
         `${files.length} file${files.length === 1 ? "" : "s"} uploaded.`,
       );
-      if (input.current) input.current.value = "";
       await refreshViews();
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Unable to upload files",
       );
     } finally {
+      // Reset even on failure so the same file can be chosen again.
+      if (input.current) input.current.value = "";
       setBusy(false);
     }
   }
@@ -605,6 +634,14 @@ export function FilesTab({ server }: { server: ServerSummary }) {
                           <a
                             role="menuitem"
                             href={`/api/servers/${server.id}/files/download?${queryPath(entry.path)}`}
+                            onClick={(event) => {
+                              if (!isDemo()) return;
+                              event.preventDefault();
+                              setMenuPath("");
+                              setError(
+                                "Downloading files is not available in the demo.",
+                              );
+                            }}
                           >
                             <Download size={14} /> Download
                           </a>
@@ -624,11 +661,15 @@ export function FilesTab({ server }: { server: ServerSummary }) {
                         <button
                           role="menuitem"
                           className="danger"
-                          onClick={() =>
-                            afterDirty(() =>
-                              openDialog({ kind: "delete", entry }),
-                            )
-                          }
+                          onClick={() => {
+                            const open = () =>
+                              openDialog({ kind: "delete", entry });
+                            // Deleting an unrelated file never endangers the
+                            // draft, so skip the unsaved-changes prompt.
+                            if (touchesOpenDocument(entry))
+                              afterDirty(open, "remove");
+                            else open();
+                          }}
                         >
                           <Trash2 size={14} /> Delete
                         </button>
@@ -693,12 +734,15 @@ export function FilesTab({ server }: { server: ServerSummary }) {
       </div>
 
       <dialog
-        open={dialog !== null}
+        ref={(element) => syncModal(element, dialog !== null)}
         className="confirmation-dialog file-dialog"
         aria-labelledby="file-dialog-title"
         onCancel={(event) => {
           event.preventDefault();
           setDialog(null);
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget && !busy) setDialog(null);
         }}
       >
         {dialog && (
@@ -820,7 +864,7 @@ export function FilesTab({ server }: { server: ServerSummary }) {
       </dialog>
 
       <dialog
-        open={dirtyAction !== null}
+        ref={(element) => syncModal(element, dirtyAction !== null)}
         className="confirmation-dialog"
         aria-labelledby="dirty-dialog-title"
         onCancel={(event) => {
@@ -843,21 +887,26 @@ export function FilesTab({ server }: { server: ServerSummary }) {
               onClick={() => {
                 const action = dirtyAction;
                 setDirtyAction(null);
-                setOpenDocument(null);
-                setDraft("");
-                if (action) void action();
+                if (action?.mode === "replace") {
+                  setOpenDocument(null);
+                  setDraft("");
+                } else if (openDocument) {
+                  setDraft(openDocument.content);
+                }
+                if (action) void action.run();
               }}
             >
               Discard
             </button>
             <button
               className="button primary"
+              disabled={busy}
               onClick={() =>
                 void (async () => {
                   const action = dirtyAction;
                   if (await save()) {
                     setDirtyAction(null);
-                    if (action) await action();
+                    if (action) await action.run();
                   }
                 })()
               }

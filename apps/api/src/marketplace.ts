@@ -186,17 +186,29 @@ async function reconcileSource(
         target = disabled;
         enabled = false;
       } else {
-        context.store.deleteAddonSource(source.server_id, source.filename);
+        context.store.deleteAddonSource(
+          source.server_id,
+          source.filename,
+          source.level_name,
+        );
         return null;
       }
     }
   } else if (!(await pathExists(target))) {
-    context.store.deleteAddonSource(source.server_id, source.filename);
+    context.store.deleteAddonSource(
+      source.server_id,
+      source.filename,
+      source.level_name,
+    );
     return null;
   }
   const info = await stat(target);
   if (!info.isFile()) {
-    context.store.deleteAddonSource(source.server_id, source.filename);
+    context.store.deleteAddonSource(
+      source.server_id,
+      source.filename,
+      source.level_name,
+    );
     return null;
   }
   return {
@@ -592,6 +604,10 @@ export async function runInstall(
 
     const undo: Array<() => Promise<void>> = [];
     const installedNames: string[] = [];
+    const installedSources: Array<{
+      filename: string;
+      levelName: string | null;
+    }> = [];
     try {
       for (const entry of staged) {
         if (resolved.target === "datapacks") {
@@ -602,6 +618,7 @@ export async function runInstall(
             levelName,
           );
           installedNames.push(result.filename);
+          installedSources.push({ filename: result.filename, levelName });
           const worldDir = path.join(context.paths.data, levelName);
           const datapacksDir = path.join(worldDir, "datapacks");
           const target = path.join(datapacksDir, result.filename);
@@ -638,6 +655,7 @@ export async function runInstall(
             context.paths.addons,
           );
           installedNames.push(filename);
+          installedSources.push({ filename, levelName: null });
           undo.push(() =>
             removeAddon(context.paths.addons, filename).catch(() => undefined),
           );
@@ -659,8 +677,12 @@ export async function runInstall(
       }
     } catch (error) {
       await Promise.all(undo.map((step) => step().catch(() => undefined)));
-      for (const filename of installedNames) {
-        context.store.deleteAddonSource(serverId, filename);
+      for (const installed of installedSources) {
+        context.store.deleteAddonSource(
+          serverId,
+          installed.filename,
+          installed.levelName,
+        );
       }
       throw error;
     }
@@ -767,21 +789,25 @@ export async function runUpdate(
     throw httpError("The update does not belong to the installed project", 400);
   }
   const file = primaryFile(version);
-  const temp = await createTempUpload(config.tempRoot);
   const backup = `${current.path}.update-backup-${crypto.randomUUID()}`;
   const directory = path.dirname(current.path);
   // Upstream-controlled name: validate before it becomes a path segment, so a
   // hostile version filename can't traverse out of the install directory.
+  // This runs before the temp file exists so a rejected name leaks nothing.
   const destinationBase = path.join(
     directory,
     safeFilename(path.basename(file.filename)),
   );
+  const temp = await createTempUpload(config.tempRoot);
   const destination =
     source.target === "addons" && current.enabled === false
       ? `${destinationBase}.disabled`
       : destinationBase;
   let backedUp = false;
   let replacementInstalled = false;
+  // Set when the original could not be put back; the backup is then the only
+  // remaining copy and must not be deleted by the cleanup below.
+  let keepBackup = false;
   try {
     await context.modrinth.downloadFile(
       {
@@ -839,14 +865,22 @@ export async function runUpdate(
   } catch (error) {
     if (replacementInstalled) await rm(destination, { force: true });
     if (backedUp && (await pathExists(backup))) {
-      await rename(backup, current.path);
+      try {
+        await rename(backup, current.path);
+      } catch (restoreError) {
+        keepBackup = true;
+        throw new Error(
+          `Update failed and the previous file could not be restored; it is preserved at ${backup}`,
+          { cause: restoreError },
+        );
+      }
     }
     if (source) context.store.recordAddonSource(source);
     throw error;
   } finally {
     await Promise.all([
       rm(temp.path, { force: true }),
-      rm(backup, { force: true }),
+      keepBackup ? Promise.resolve() : rm(backup, { force: true }),
     ]);
   }
 }

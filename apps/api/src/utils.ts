@@ -27,9 +27,10 @@ export function safeFilename(input: string): string {
     input.includes("/") ||
     input.includes("\\")
   ) {
-    throw new Error("Invalid file name");
+    throw httpError("Invalid file name", 400);
   }
-  if (input === "." || input === "..") throw new Error("Invalid file name");
+  if (input === "." || input === "..")
+    throw httpError("Invalid file name", 400);
   return input;
 }
 
@@ -104,13 +105,28 @@ export function resolveWithin(root: string, ...segments: string[]): string {
       segment === "." ||
       segment === ".."
     ) {
-      throw new Error("Invalid path segment");
+      throw httpError("Invalid path segment", 400);
     }
   }
   const target = path.resolve(resolvedRoot, ...segments);
   const relative = path.relative(resolvedRoot, target);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("Invalid path segment");
+  if (
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw httpError("Invalid path segment", 400);
   }
   return target;
+}
+
+/**
+ * Error carrying an HTTP status. The API error handler only forwards messages
+ * of errors classified this way; everything else becomes a generic 500.
+ */
+export function httpError(
+  message: string,
+  statusCode: number,
+): Error & { statusCode: number } {
+  return Object.assign(new Error(message), { statusCode });
 }

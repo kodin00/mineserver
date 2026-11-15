@@ -8,7 +8,7 @@ import type { BackupFile, BackupSettings } from "@mineserver/shared";
 import { config } from "./config.js";
 import type { InstancePaths } from "./compose.js";
 import type { ComposeManager } from "./docker.js";
-import { pathExists, runCommand, safeFilename } from "./utils.js";
+import { httpError, pathExists, runCommand, safeFilename } from "./utils.js";
 
 const backupPattern = /\.(?:zip|tgz|tar\.gz)$/i;
 const activeBackups = new Set<string>();
@@ -26,7 +26,8 @@ function openZip(filename: string): Promise<ZipFile> {
       filename,
       { lazyEntries: true, autoClose: true },
       (error, zip) => {
-        if (error || !zip) reject(error ?? new Error("Unable to open ZIP"));
+        if (error || !zip)
+          reject(httpError(error?.message ?? "Unable to open ZIP", 400));
         else resolve(zip);
       },
     );
@@ -40,7 +41,7 @@ function entryStream(
   return new Promise((resolve, reject) => {
     zip.openReadStream(entry, (error, stream) => {
       if (error || !stream)
-        reject(error ?? new Error("Unable to read ZIP entry"));
+        reject(httpError(error?.message ?? "Unable to read ZIP entry", 400));
       else resolve(stream);
     });
   });
@@ -55,7 +56,7 @@ function safeZipEntry(name: string): string {
     /^[A-Za-z]:/.test(normalized) ||
     segments.some((segment) => segment === "..")
   ) {
-    throw new Error(`Unsafe ZIP path: ${name}`);
+    throw httpError(`Unsafe ZIP path: ${name}`, 400);
   }
   return segments.join("/");
 }
@@ -85,14 +86,15 @@ async function extractZip(filename: string, destination: string) {
           const target = path.join(destination, ...relative.split("/"));
           const relativeTarget = path.relative(destination, target);
           if (
-            relativeTarget.startsWith("..") ||
+            relativeTarget === ".." ||
+            relativeTarget.startsWith(`..${path.sep}`) ||
             path.isAbsolute(relativeTarget)
           ) {
-            throw new Error(`Unsafe ZIP path: ${entry.fileName}`);
+            throw httpError(`Unsafe ZIP path: ${entry.fileName}`, 400);
           }
           const mode = (entry.externalFileAttributes >>> 16) & 0xffff;
           if ((mode & 0o170000) === 0o120000) {
-            throw new Error("Backup contains a symbolic link");
+            throw httpError("Backup contains a symbolic link", 400);
           }
           if (entry.fileName.endsWith("/")) {
             await mkdir(target, { recursive: true });
@@ -100,10 +102,13 @@ async function extractZip(filename: string, destination: string) {
             fileCount += 1;
             expandedBytes += entry.uncompressedSize;
             if (fileCount > config.MAX_ZIP_FILES) {
-              throw new Error("Backup contains too many files");
+              throw httpError("Backup contains too many files", 400);
             }
             if (expandedBytes > config.MAX_ZIP_EXPANDED_BYTES) {
-              throw new Error("Backup expands beyond the configured limit");
+              throw httpError(
+                "Backup expands beyond the configured limit",
+                400,
+              );
             }
             await mkdir(path.dirname(target), { recursive: true });
             const stream = await entryStream(zip, entry);
@@ -193,7 +198,8 @@ export async function createBackup(
   docker: ComposeManager,
   settings: BackupSettings,
 ): Promise<string> {
-  if (activeBackups.has(id)) throw new Error("A backup is already running");
+  if (activeBackups.has(id))
+    throw httpError("A backup is already running", 400);
   activeBackups.add(id);
   try {
     await mkdir(paths.backups, { recursive: true });
@@ -217,9 +223,9 @@ export async function createBackup(
 
 export async function removeBackup(directory: string, filename: string) {
   const safe = safeFilename(filename);
-  if (!backupPattern.test(safe)) throw new Error("Invalid backup file");
+  if (!backupPattern.test(safe)) throw httpError("Invalid backup file", 400);
   const target = path.join(directory, safe);
-  if (!(await pathExists(target))) throw new Error("Backup not found");
+  if (!(await pathExists(target))) throw httpError("Backup not found", 404);
   await rm(target);
 }
 
@@ -230,12 +236,12 @@ export async function restoreBackup(
   docker: ComposeManager,
 ) {
   const safe = safeFilename(filename);
-  if (!backupPattern.test(safe)) throw new Error("Invalid backup file");
+  if (!backupPattern.test(safe)) throw httpError("Invalid backup file", 400);
   const backup = path.join(paths.backups, safe);
-  if (!(await pathExists(backup))) throw new Error("Backup not found");
+  if (!(await pathExists(backup))) throw httpError("Backup not found", 404);
   const state = await docker.status(id, paths);
   if (state.state !== "stopped")
-    throw new Error("Stop the server before restoring a backup");
+    throw httpError("Stop the server before restoring a backup", 400);
 
   const stamp = backupStamp();
   const safety = path.join(paths.backups, `pre-restore-${stamp}.zip`);

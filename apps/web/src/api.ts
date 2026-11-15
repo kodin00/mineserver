@@ -59,6 +59,8 @@ export async function api<T>(
   return response.json() as Promise<T>;
 }
 
+export const isDemo = () => import.meta.env.VITE_DEMO === "true";
+
 export function jsonBody(value: unknown): Pick<RequestInit, "body"> {
   return { body: JSON.stringify(value) };
 }

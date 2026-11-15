@@ -30,6 +30,11 @@ interface ContainerInspection {
   RestartCount?: number;
 }
 
+// A genuine 0% reading must stay 0 rather than collapse to "unknown".
+function finiteOrNull(value: number): number | null {
+  return Number.isFinite(value) ? value : null;
+}
+
 export class ComposeManager {
   private args(id: string, paths: InstancePaths, rest: string[]): string[] {
     return [
@@ -303,9 +308,13 @@ export class ComposeManager {
         // The container can be running while RCON is still starting.
       }
       return {
-        cpuPercent: Number.parseFloat(String(value.CPUPerc ?? "")) || null,
+        cpuPercent: finiteOrNull(
+          Number.parseFloat(String(value.CPUPerc ?? "")),
+        ),
         memoryUsage: value.MemUsage ?? null,
-        memoryPercent: Number.parseFloat(String(value.MemPerc ?? "")) || null,
+        memoryPercent: finiteOrNull(
+          Number.parseFloat(String(value.MemPerc ?? "")),
+        ),
         players,
         uptime: value.PIDs ? `${value.PIDs} processes` : null,
       };

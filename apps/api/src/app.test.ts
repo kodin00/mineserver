@@ -1636,3 +1636,45 @@ describe("player access and mod requests", () => {
     store.db.close();
   });
 });
+
+describe("route input handling", () => {
+  it("rejects an unknown server action without recording an operation", async () => {
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture();
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/actions/explode`,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "x-csrf-token": csrfToken,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(store.listOperations(serverId)).toHaveLength(0);
+    await app.close();
+    store.db.close();
+  });
+
+  it("decodes add-on filenames once so a literal percent sign works", async () => {
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture();
+    const directory = instancePaths(config.instancesRoot, serverId).addons;
+    await writeFile(path.join(directory, "50%25off.jar"), "jar");
+    const headers = {
+      cookie: `ms_session=${sessionToken}`,
+      "x-csrf-token": csrfToken,
+    };
+    const url = `/api/servers/${serverId}/addons/${encodeURIComponent("50%25off.jar")}`;
+    const download = await app.inject({
+      method: "GET",
+      url: `${url}/download`,
+      headers,
+    });
+    expect(download.statusCode).toBe(200);
+    const removed = await app.inject({ method: "DELETE", url, headers });
+    expect(removed.statusCode).toBe(200);
+    await expect(
+      stat(path.join(directory, "50%25off.jar")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await app.close();
+    store.db.close();
+  });
+});

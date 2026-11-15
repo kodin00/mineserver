@@ -21,6 +21,7 @@ import {
   serverFileDownload,
   writeServerFile,
 } from "./files.js";
+import { resolveWithin } from "./utils.js";
 
 const roots: string[] = [];
 
@@ -248,5 +249,22 @@ describe("server file access", () => {
     await expect(readServerFile(root, "server.jar", 1024)).rejects.toThrow(
       "cannot be edited",
     );
+  });
+});
+
+describe("names that begin with two dots", () => {
+  it("treats ..name as an ordinary child, not a parent escape", async () => {
+    const root = await fixture();
+    const created = await createServerFileEntry(
+      root,
+      "",
+      "..backup.txt",
+      "file",
+    );
+    expect(created.path).toBe("..backup.txt");
+    const document = await readServerFile(root, "..backup.txt", 1024);
+    expect(document.path).toBe("..backup.txt");
+    expect(resolveWithin(root, "..world")).toBe(path.join(root, "..world"));
+    expect(() => resolveWithin(root, "..")).toThrow();
   });
 });

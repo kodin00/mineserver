@@ -8,7 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { BackupFile, ServerSummary } from "@mineserver/shared";
-import { api, formatBytes } from "../../api";
+import { api, formatBytes, isDemo } from "../../api";
 import { ErrorBanner } from "../../components/Layout";
 
 export function BackupsTab({
@@ -21,11 +21,15 @@ export function BackupsTab({
   const [files, setFiles] = useState<BackupFile[]>([]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  // Only a load failure is cleared by a later successful poll; errors from
+  // user actions stay until the next action.
+  const [loadError, setLoadError] = useState("");
   const load = useCallback(async () => {
     try {
       setFiles(await api<BackupFile[]>(`/api/servers/${server.id}/backups`));
+      setLoadError("");
     } catch (error) {
-      setError(
+      setLoadError(
         error instanceof Error ? error.message : "Unable to load backups",
       );
     }
@@ -101,6 +105,7 @@ export function BackupsTab({
   return (
     <div className="tab-stack">
       {error && <ErrorBanner message={error} />}
+      {loadError && !error && <ErrorBanner message={loadError} />}
       <div className="panel action-bar">
         <div>
           <h2>World protection</h2>
@@ -148,6 +153,13 @@ export function BackupsTab({
                   className="icon-button"
                   title="Download"
                   href={`/api/servers/${server.id}/backups/${encodeURIComponent(file.name)}/download`}
+                  onClick={(event) => {
+                    if (!isDemo()) return;
+                    event.preventDefault();
+                    setError(
+                      "Downloading backups is not available in the demo.",
+                    );
+                  }}
                 >
                   <Download size={17} />
                 </a>

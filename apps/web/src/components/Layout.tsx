@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { Box, LogOut, Settings } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
@@ -125,6 +125,10 @@ export function ConfirmationDialog({
   onCancel(): void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Several dialogs can share a page, so ids must be unique per instance.
+  const id = useId();
+  const titleId = `${id}-title`;
+  const bodyId = `${id}-body`;
 
   useEffect(() => {
     const dialog = ref.current;
@@ -137,8 +141,8 @@ export function ConfirmationDialog({
     <dialog
       ref={ref}
       className="confirmation-dialog"
-      aria-labelledby="confirmation-title"
-      aria-describedby="confirmation-body"
+      aria-labelledby={titleId}
+      aria-describedby={bodyId}
       onCancel={(event) => {
         event.preventDefault();
         onCancel();
@@ -148,8 +152,8 @@ export function ConfirmationDialog({
       }}
     >
       <div className="dialog-card">
-        <h2 id="confirmation-title">{title}</h2>
-        <p id="confirmation-body">{body}</p>
+        <h2 id={titleId}>{title}</h2>
+        <p id={bodyId}>{body}</p>
         <div className="dialog-actions">
           <button className="button ghost" onClick={onCancel}>
             Cancel

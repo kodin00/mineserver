@@ -108,8 +108,7 @@ export class Store {
         version_id TEXT NOT NULL,
         version_number TEXT NOT NULL,
         sha512 TEXT NOT NULL,
-        installed_at TEXT NOT NULL,
-        PRIMARY KEY (server_id, filename)
+        installed_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS panel_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -195,6 +194,61 @@ export class Store {
         CREATE TABLE IF NOT EXISTS mod_requests (id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, items_json TEXT NOT NULL, status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         PRAGMA user_version=7;`);
     }
+    if (version < 8) {
+      // addon_sources used PRIMARY KEY(server_id, filename), so the same
+      // datapack filename could not be installed into two worlds. SQLite cannot
+      // alter a primary key, so rebuild the table without it and enforce
+      // uniqueness through an expression index that normalises a NULL
+      // level_name to '' (NULLs are otherwise distinct in unique keys).
+      const hasPrimaryKey = (
+        this.db.prepare("PRAGMA table_info(addon_sources)").all() as Array<{
+          pk: number;
+        }>
+      ).some((column) => column.pk > 0);
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (hasPrimaryKey) {
+          this.db.exec(`
+            DROP TABLE IF EXISTS addon_sources_v8;
+            CREATE TABLE addon_sources_v8 (
+              server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+              filename TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              target TEXT NOT NULL DEFAULT 'addons'
+                CHECK(target IN ('addons','datapacks')),
+              project_type TEXT NOT NULL DEFAULT 'mod',
+              level_name TEXT,
+              project_id TEXT NOT NULL,
+              project_title TEXT NOT NULL,
+              version_id TEXT NOT NULL,
+              version_number TEXT NOT NULL,
+              sha512 TEXT NOT NULL,
+              installed_at TEXT NOT NULL
+            );
+            INSERT INTO addon_sources_v8(
+              server_id,filename,provider,target,project_type,level_name,
+              project_id,project_title,version_id,version_number,sha512,installed_at
+            ) SELECT
+              server_id,filename,provider,target,project_type,level_name,
+              project_id,project_title,version_id,version_number,sha512,installed_at
+            FROM addon_sources;
+            DROP TABLE addon_sources;
+            ALTER TABLE addon_sources_v8 RENAME TO addon_sources;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_addon_sources_project
+              ON addon_sources(server_id,provider,target,project_id,COALESCE(level_name,''));
+          `);
+        }
+        this.db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_addon_sources_file
+            ON addon_sources(server_id,filename,COALESCE(level_name,''));
+          PRAGMA user_version=8;
+          COMMIT;
+        `);
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    }
     this.db
       .prepare(
         "UPDATE mod_requests SET status='failed', error='Installation interrupted; some projects may already have been installed', updated_at=? WHERE status='installing'",
@@ -231,6 +285,14 @@ export class Store {
         )
         .all(serverId) as any[]
     ).map((row) => this.modRequest(row));
+  }
+  countModRequests(serverId: string, status: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM mod_requests WHERE server_id=? AND status=?",
+      )
+      .get(serverId, status) as { n: number };
+    return Number(row.n);
   }
   getModRequest(serverId: string, id: string) {
     const row = this.db
@@ -478,7 +540,10 @@ export class Store {
       previous.level_name,
     );
     if (result.changes !== 1) {
-      throw new Error("The installed project changed during the update");
+      throw Object.assign(
+        new Error("The installed project changed during the update"),
+        { statusCode: 409 },
+      );
     }
   }
 
@@ -513,10 +578,18 @@ export class Store {
       AddonSourceRow | undefined;
   }
 
-  deleteAddonSource(serverId: string, filename: string) {
+  deleteAddonSource(
+    serverId: string,
+    filename: string,
+    levelName: string | null,
+  ) {
     this.db
-      .prepare("DELETE FROM addon_sources WHERE server_id=? AND filename=?")
-      .run(serverId, filename);
+      .prepare(
+        `DELETE FROM addon_sources
+          WHERE server_id=? AND filename=?
+            AND COALESCE(level_name,'')=COALESCE(?,'')`,
+      )
+      .run(serverId, filename, levelName);
   }
 
   deleteAddonSourceProject(

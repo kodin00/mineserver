@@ -35,23 +35,36 @@ export function OverviewTab({
       setStats(null);
       return;
     }
+    // A response landing after the server stopped must not repaint old stats.
+    let cancelled = false;
     const load = () =>
       api<ServerStats>(`/api/servers/${server.id}/stats`)
-        .then(setStats)
+        .then((next) => {
+          if (!cancelled) setStats(next);
+        })
         .catch(() => undefined);
     void load();
     const timer = setInterval(load, 10_000);
-    return () => clearInterval(timer);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [server.id, server.state]);
 
   useEffect(() => {
+    let cancelled = false;
     const load = () =>
       api<Operation[]>(`/api/servers/${server.id}/operations`)
-        .then(setOperations)
+        .then((next) => {
+          if (!cancelled) setOperations(next);
+        })
         .catch(() => undefined);
     void load();
     const timer = setInterval(load, 3000);
-    return () => clearInterval(timer);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [server.id]);
 
   async function action(name: string) {

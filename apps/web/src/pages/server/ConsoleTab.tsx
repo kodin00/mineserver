@@ -18,8 +18,17 @@ export function ConsoleTab({ server }: { server: ServerSummary }) {
         [...current, ...String(event.data).split("\n")].slice(-1000),
       );
     };
-    socket.onerror = () => setError("Live log connection was interrupted");
-    return () => socket.close();
+    const interrupted = "Live log connection was interrupted";
+    socket.onopen = () =>
+      setError((current) => (current === interrupted ? "" : current));
+    socket.onerror = () => setError(interrupted);
+    return () => {
+      // Closing a still-connecting socket fires onerror; ignore teardown.
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.close();
+    };
   }, [server.id, server.state]);
 
   useEffect(() => {
@@ -82,6 +91,7 @@ export function ConsoleTab({ server }: { server: ServerSummary }) {
           <input
             value={command}
             onChange={(event) => setCommand(event.target.value)}
+            aria-label="Minecraft command"
             placeholder={
               server.state === "running"
                 ? "Type a Minecraft command…"
@@ -91,6 +101,8 @@ export function ConsoleTab({ server }: { server: ServerSummary }) {
           />
           <button
             className="icon-button dark"
+            aria-label="Send command"
+            title="Send command"
             disabled={!command.trim() || server.state !== "running"}
           >
             <CornerDownLeft size={17} />

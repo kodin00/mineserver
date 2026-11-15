@@ -25,6 +25,7 @@ mkdir mineserver && cd mineserver
 curl -fsSLO https://raw.githubusercontent.com/kodin00/mineserver/master/compose.yaml
 curl -fsSLO https://raw.githubusercontent.com/kodin00/mineserver/master/.env.example
 cp .env.example .env
+# Edit .env and replace the example ADMIN_PASSWORD (the API refuses to start with it).
 sudo mkdir -p /opt/mineserver
 docker compose pull
 docker compose up -d
@@ -34,6 +35,7 @@ docker compose up -d
 
 ```sh
 cp .env.example .env
+# Edit .env and replace the example ADMIN_PASSWORD (the API refuses to start with it).
 docker compose up -d --build
 ```
 
@@ -49,13 +51,13 @@ The API service runs as root in the supplied Compose configuration to access the
 
 Edit `.env` before starting the panel. After changing settings, restart with `docker compose up -d`.
 
-| Setting                | Default           | What it changes                                   |
-| ---------------------- | ----------------- | ------------------------------------------------- |
-| `ADMIN_PASSWORD`       | `mineserver123!`  | Password used to sign in.                         |
-| `PANEL_PORT`           | `8080`            | Port used to open the panel.                      |
-| `MINESERVER_DATA_ROOT` | `/opt/mineserver` | Where worlds, backups, and panel data are stored. |
-| `TZ`                   | `Asia/Jakarta`    | Time zone used for scheduled backups.             |
-| `COOKIE_SECURE`        | `false`           | Set to `true` when using HTTPS.                   |
+| Setting                | Default           | What it changes                                                                         |
+| ---------------------- | ----------------- | --------------------------------------------------------------------------------------- |
+| `ADMIN_PASSWORD`       | none (required)   | Password used to sign in. At least 12 characters; the `.env.example` value is rejected. |
+| `PANEL_PORT`           | `8080`            | Port used to open the panel.                                                            |
+| `MINESERVER_DATA_ROOT` | `/opt/mineserver` | Where worlds, backups, and panel data are stored.                                       |
+| `TZ`                   | `Asia/Jakarta`    | Time zone used for scheduled backups.                                                   |
+| `COOKIE_SECURE`        | `false`           | Set to `true` when using HTTPS.                                                         |
 
 Changing `ADMIN_PASSWORD` after the first login has no effect—the password is stored in the panel database.
 

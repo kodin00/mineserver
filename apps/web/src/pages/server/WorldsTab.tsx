@@ -13,7 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import type { Operation, ServerSummary, WorldInfo } from "@mineserver/shared";
-import { api, formatBytes } from "../../api";
+import { api, formatBytes, isDemo } from "../../api";
 import { ConfirmationDialog, ErrorBanner } from "../../components/Layout";
 
 export function WorldsTab({
@@ -70,7 +70,7 @@ export function WorldsTab({
   useEffect(() => {
     if (operation?.status === "succeeded") {
       setMessage(operation.message ?? "World imported.");
-      setFile(null);
+      clearFile();
       setOperation(null);
       void load();
       void refreshServer();
@@ -80,12 +80,18 @@ export function WorldsTab({
     }
   }, [operation, load, refreshServer]);
 
+  function clearFile() {
+    setFile(null);
+    // Otherwise re-choosing the same ZIP would not fire onChange.
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
   function choose(candidate: File | null) {
     setError("");
     setMessage("");
     if (!candidate) return;
     if (!candidate.name.toLowerCase().endsWith(".zip")) {
-      setFile(null);
+      clearFile();
       setError("Choose a ZIP world archive.");
       return;
     }
@@ -99,9 +105,13 @@ export function WorldsTab({
   }
 
   async function exportWorld() {
-    setExporting(true);
     setError("");
     setMessage("");
+    if (isDemo()) {
+      setError("Exporting a world is not available in the demo.");
+      return;
+    }
+    setExporting(true);
     try {
       const response = await fetch(`/api/servers/${server.id}/world/export`, {
         credentials: "same-origin",
@@ -252,7 +262,7 @@ export function WorldsTab({
             <button
               className="button ghost"
               disabled={busy}
-              onClick={() => setFile(null)}
+              onClick={clearFile}
             >
               Clear
             </button>

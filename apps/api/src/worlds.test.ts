@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { ZipArchive } from "archiver";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServerConfigSchema } from "@mineserver/shared";
 import { instancePaths } from "./compose.js";
 import { config } from "./config.js";
@@ -530,5 +530,49 @@ describe("world info and export", () => {
       ),
     ).rejects.toThrow("flush failed");
     expect(calls).toEqual(["save-off", "save-all flush", "save-on"]);
+  });
+});
+
+describe("world import rollback cleanup", () => {
+  it("keeps the new world when deleting the rollback directory fails", async () => {
+    const { root, paths } = await workspace();
+    const activeWorld = path.join(paths.data, "world");
+    await mkdir(activeWorld);
+    await writeFile(path.join(activeWorld, "level.dat"), "old");
+    const archive = path.join(root, "world.zip");
+    await makeZip(archive, [{ name: "level.dat", body: "new" }]);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      importWorld(
+        "test-server",
+        archive,
+        paths,
+        serverConfig,
+        stoppedDocker,
+        "world",
+        {
+          rename,
+          remove: async (target, options) => {
+            if (path.basename(target).startsWith(".world-rollback-")) {
+              throw new Error("injected rollback cleanup failure");
+            }
+            await rm(target, options);
+          },
+        },
+      ),
+    ).resolves.toContain("remains stopped");
+    errors.mockRestore();
+
+    expect(await readFile(path.join(activeWorld, "level.dat"), "utf8")).toBe(
+      "new",
+    );
+    const leftovers = (await readdir(paths.data)).filter((name) =>
+      name.startsWith(".world-rollback-"),
+    );
+    expect(leftovers).toHaveLength(1);
+    expect(
+      await readFile(path.join(paths.data, leftovers[0]!, "level.dat"), "utf8"),
+    ).toBe("old");
   });
 });

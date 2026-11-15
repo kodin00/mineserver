@@ -21,6 +21,24 @@ describe("compose generation", () => {
     expect(environment.SPAWN_PROTECTION).toBe("0");
   });
 
+  it("escapes dollar signs so Compose does not interpolate user values", () => {
+    const paths = instancePaths("/opt/mineserver/instances", "abc");
+    const document = YAML.parse(
+      renderCompose(
+        "abc",
+        {
+          ...base,
+          motd: "Save $5 on ${HOME}",
+          advancedEnv: { GREETING: "$USER" },
+        },
+        paths,
+      ),
+    );
+    expect(document.services.mc.environment.MOTD).toBe("Save $$5 on $${HOME}");
+    expect(document.services.mc.environment.GREETING).toBe("$$USER");
+    expect(document.services.mc.environment.EULA).toBe("TRUE");
+  });
+
   it("mounts Paper uploads as plugins and does not expose RCON", () => {
     const paths = instancePaths("/opt/mineserver/instances", "abc");
     const output = renderCompose("abc", base, paths);

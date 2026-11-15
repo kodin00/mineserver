@@ -17,6 +17,7 @@ export function SettingsTab({
   const [error, setError] = useState("");
   const [deleteText, setDeleteText] = useState("");
   const [permanent, setPermanent] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   async function save(value: ServerConfig) {
     await api(`/api/servers/${server.id}`, {
@@ -27,8 +28,9 @@ export function SettingsTab({
   }
 
   async function remove() {
-    if (deleteText !== server.config.name) return;
+    if (deleteText !== server.config.name || deleting) return;
     setError("");
+    setDeleting(true);
     try {
       await api(`/api/servers/${server.id}?permanent=${permanent}`, {
         method: "DELETE",
@@ -38,6 +40,7 @@ export function SettingsTab({
       setError(
         error instanceof Error ? error.message : "Unable to delete server",
       );
+      setDeleting(false);
     }
   }
 
@@ -80,7 +83,7 @@ export function SettingsTab({
         </label>
         <button
           className="button danger"
-          disabled={deleteText !== server.config.name}
+          disabled={deleteText !== server.config.name || deleting}
           onClick={() => void remove()}
         >
           <Trash2 size={17} />{" "}

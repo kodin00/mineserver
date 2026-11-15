@@ -32,9 +32,7 @@ export async function backupsRoutes(
     "/api/servers/:id/backups/:filename/download",
     async (request, reply) => {
       const row = requireServer(store, request.params.id);
-      const filename = safeFilename(
-        decodeURIComponent(request.params.filename),
-      );
+      const filename = safeFilename(request.params.filename);
       const target = path.join(
         instancePaths(config.instancesRoot, row.id).backups,
         filename,
@@ -60,7 +58,7 @@ export async function backupsRoutes(
     "/api/servers/:id/backups/:filename/restore",
     async (request, reply) => {
       const row = requireServer(store, request.params.id);
-      const filename = decodeURIComponent(request.params.filename);
+      const filename = request.params.filename;
       const paths = instancePaths(config.instancesRoot, row.id);
       const operation = jobs.runExclusive(row.id, "restore", () =>
         restoreBackup(row.id, filename, paths, docker),
@@ -76,7 +74,7 @@ export async function backupsRoutes(
       return jobs.mutations.runExclusive(row.id, "backup-delete", async () => {
         await removeBackup(
           instancePaths(config.instancesRoot, row.id).backups,
-          decodeURIComponent(request.params.filename),
+          request.params.filename,
         );
         return { ok: true };
       });

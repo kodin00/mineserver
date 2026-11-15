@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Operation } from "@mineserver/shared";
 import { JobRunner, ServerMutationCoordinator } from "./jobs.js";
 
@@ -102,5 +102,42 @@ describe("JobRunner exclusive operations", () => {
     expect(() =>
       jobs.runExclusive("one", "file-write", async () => "done"),
     ).not.toThrow();
+  });
+});
+
+describe("JobRunner drain and bookkeeping", () => {
+  it("resolves drain as soon as in-flight work finishes instead of waiting for the cap", async () => {
+    const { store } = jobStore();
+    const jobs = new JobRunner(store as never);
+    jobs.run(
+      "one",
+      "backup",
+      () => new Promise((resolve) => setTimeout(resolve, 20)),
+    );
+    const started = Date.now();
+    await jobs.drain(10_000);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    await expect(jobs.drain(10_000)).resolves.toBeUndefined();
+  });
+
+  it("still runs the task and releases the lease when status bookkeeping throws", async () => {
+    const { store } = jobStore();
+    const failing = {
+      ...store,
+      updateOperation() {
+        throw new Error("database is locked");
+      },
+    };
+    const jobs = new JobRunner(failing as never);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    let ran = false;
+    jobs.runExclusive("one", "restore", async () => {
+      ran = true;
+    });
+    await expect.poll(() => jobs.mutations.current("one")).toBeNull();
+    expect(ran).toBe(true);
+    error.mockRestore();
   });
 });

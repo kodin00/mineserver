@@ -61,6 +61,7 @@ export class ServerMutationCoordinator {
 export class JobRunner extends EventEmitter {
   readonly mutations = new ServerMutationCoordinator();
   private inFlight = 0;
+  private idleWaiters: Array<() => void> = [];
 
   constructor(private readonly store: Store) {
     super();
@@ -72,17 +73,15 @@ export class JobRunner extends EventEmitter {
    */
   async drain(maxWaitMs: number): Promise<void> {
     if (this.inFlight === 0) return;
-    let resolveIdle: () => void = () => undefined;
-    const idle = new Promise<void>((resolve) => {
-      resolveIdle = resolve;
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.idleWaiters = this.idleWaiters.filter((item) => item !== done);
+        resolve();
+      };
+      const timer = setTimeout(done, maxWaitMs);
+      this.idleWaiters.push(done);
     });
-    const cap = new Promise<void>((resolve) =>
-      setTimeout(resolve, maxWaitMs).unref(),
-    );
-    // Attach immediately so a late resolve can't surface as a rejection-free
-    // dangling promise warning.
-    void idle.catch(() => undefined);
-    return Promise.race([idle, cap]).finally(() => resolveIdle());
   }
 
   run(
@@ -140,6 +139,26 @@ export class JobRunner extends EventEmitter {
       await this.runOperation(operation, task);
     } finally {
       this.inFlight -= 1;
+      if (this.inFlight === 0) {
+        for (const waiter of [...this.idleWaiters]) waiter();
+      }
+    }
+  }
+
+  /**
+   * Status bookkeeping is best effort. A database error here must neither
+   * become an unhandled rejection nor stop the task from running, because the
+   * task's own `finally` is what releases the server mutation lease.
+   */
+  private record(
+    id: string,
+    status: Operation["status"],
+    message: string | null,
+  ) {
+    try {
+      this.store.updateOperation(id, status, message);
+    } catch (error) {
+      console.error(`[mineserver] Could not record operation ${id}:`, error);
     }
   }
 
@@ -147,7 +166,7 @@ export class JobRunner extends EventEmitter {
     operation: Operation,
     task: () => Promise<unknown>,
   ) {
-    this.store.updateOperation(operation.id, "running", null);
+    this.record(operation.id, "running", null);
     this.emit("operation", {
       ...operation,
       status: "running",
@@ -161,7 +180,7 @@ export class JobRunner extends EventEmitter {
         typeof result === "string" && result.trim()
           ? result.slice(0, 4000)
           : "Completed";
-      this.store.updateOperation(operation.id, "succeeded", message);
+      this.record(operation.id, "succeeded", message);
       this.emit("operation", {
         ...operation,
         status: "succeeded",
@@ -170,7 +189,7 @@ export class JobRunner extends EventEmitter {
       });
     } catch (error: any) {
       const message = String(error?.message ?? error).slice(0, 4000);
-      this.store.updateOperation(operation.id, "failed", message);
+      this.record(operation.id, "failed", message);
       this.emit("operation", {
         ...operation,
         status: "failed",

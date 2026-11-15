@@ -12,7 +12,7 @@ import {
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 import type { ServerConfig } from "@mineserver/shared";
 import { config } from "./config.js";
-import { pathExists, resolveWithin, safeFilename } from "./utils.js";
+import { httpError, pathExists, resolveWithin, safeFilename } from "./utils.js";
 
 // The Minecraft container runs as uid 1000, so anything the panel writes into
 // the data volume has to be readable by it or the server silently ignores it.
@@ -86,7 +86,8 @@ function openZip(filename: string): Promise<ZipFile> {
       filename,
       { lazyEntries: true, autoClose: true },
       (error, zip) => {
-        if (error || !zip) reject(error ?? new Error("Unable to open ZIP"));
+        if (error || !zip)
+          reject(httpError(error?.message ?? "Unable to open ZIP", 400));
         else resolve(zip);
       },
     );
@@ -113,14 +114,17 @@ async function inspectDatapackZip(tempPath: string) {
           expanded += entry.uncompressedSize;
           if (entries > config.MODRINTH_MAX_DATAPACK_FILES) {
             reject(
-              new Error(
+              httpError(
                 `Datapack contains more than ${config.MODRINTH_MAX_DATAPACK_FILES} files`,
+                400,
               ),
             );
             return;
           }
           if (expanded > config.MAX_ZIP_EXPANDED_BYTES) {
-            reject(new Error("Datapack expands beyond the configured limit"));
+            reject(
+              httpError("Datapack expands beyond the configured limit", 400),
+            );
             return;
           }
           // Minecraft accepts pack.mcmeta at the root; some packs nest it one
@@ -137,7 +141,10 @@ async function inspectDatapackZip(tempPath: string) {
     zip.close();
   }
   if (!hasManifest) {
-    throw new Error("That file does not look like a datapack (no pack.mcmeta)");
+    throw httpError(
+      "That file does not look like a datapack (no pack.mcmeta)",
+      400,
+    );
   }
 }
 
@@ -155,8 +162,9 @@ export async function installDatapack(
 ): Promise<DatapackInstallResult> {
   const filename = safeFilename(path.basename(originalName));
   if (!filename.toLowerCase().endsWith(".zip")) {
-    throw new Error(
+    throw httpError(
       "Only .zip datapacks are accepted. If this project ships as a mod, install it under add-ons instead.",
+      400,
     );
   }
   await inspectDatapackZip(tempPath);
@@ -175,7 +183,7 @@ export async function installDatapack(
   );
   const target = path.join(directory, filename);
   if (collision) {
-    throw new Error(`A datapack named ${filename} already exists`);
+    throw httpError(`A datapack named ${filename} already exists`, 400);
   }
   await rename(tempPath, target);
   try {

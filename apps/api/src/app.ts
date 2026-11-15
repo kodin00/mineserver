@@ -58,10 +58,19 @@ export async function buildApp(
   app.addHook("onClose", async () => backupScheduler.stop());
 
   app.setErrorHandler((error, request, reply) => {
-    const message = error instanceof Error ? error.message : String(error);
-    const status =
-      (error as { statusCode?: number }).statusCode ??
-      (/not found/i.test(message) ? 404 : 400);
+    const explicitStatus = (error as { statusCode?: unknown }).statusCode;
+    const isValidation =
+      typeof error === "object" &&
+      error !== null &&
+      Array.isArray((error as { issues?: unknown }).issues);
+    // Only errors explicitly classified with an HTTP status (or schema
+    // validation failures) may expose their message. Anything else, such as
+    // SQLite or filesystem errors, is logged and answered generically.
+    const classified =
+      typeof explicitStatus === "number" &&
+      explicitStatus >= 400 &&
+      explicitStatus < 600;
+    const status = classified ? explicitStatus : isValidation ? 400 : 500;
     const details = {
       err: error,
       method: request.method,
@@ -70,7 +79,12 @@ export async function buildApp(
     };
     if (status >= 500) request.log.error(details, "Request failed");
     else request.log.warn(details, "Request rejected");
-    reply.code(status).send({ error: errorMessage(error) });
+    reply.code(status).send({
+      error:
+        classified || isValidation
+          ? errorMessage(error)
+          : "Internal server error",
+    });
   });
 
   // Root-level so the authentication and CSRF checks apply to every route

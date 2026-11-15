@@ -25,7 +25,18 @@ import {
   runPlayerAction,
   runWhitelistAction,
 } from "../players.js";
-import { pathExists, randomToken, sha256 } from "../utils.js";
+import { httpError, pathExists, randomToken, sha256 } from "../utils.js";
+
+const serverActions = [
+  "run",
+  "start",
+  "rebuild",
+  "apply",
+  "stop",
+  "restart",
+  "pull",
+  "backup",
+];
 
 export async function serversRoutes(
   app: FastifyInstance,
@@ -135,6 +146,9 @@ export async function serversRoutes(
     const row = requireServer(store, request.params.id);
     const paths = instancePaths(config.instancesRoot, row.id);
     const action = request.params.action;
+    if (!serverActions.includes(action)) {
+      throw httpError(`Unknown action: ${action}`, 400);
+    }
     const operation = jobs.runExclusive(row.id, action, async () => {
       if (
         ["run", "start", "rebuild", "apply", "restart", "pull"].includes(action)
@@ -164,8 +178,6 @@ export async function serversRoutes(
         await rm(paths.backupMigrationMarker, { force: true });
       } else if (action === "backup") {
         await createBackup(row.id, paths, docker, rowConfig(row).backups);
-      } else {
-        throw new Error("Unknown action");
       }
     });
     return reply.code(202).send(operation);
@@ -232,11 +244,14 @@ export async function serversRoutes(
       const row = requireServer(store, request.params.id);
       const kind = addonKind(rowConfig(row).type);
       if (!kind)
-        throw new Error("This server type does not support managed add-ons");
+        throw httpError(
+          "This server type does not support managed add-ons",
+          400,
+        );
       const files = await listAddons(
         instancePaths(config.instancesRoot, row.id).addons,
       );
-      if (files.length === 0) throw new Error("No add-ons to share");
+      if (files.length === 0) throw httpError("No add-ons to share", 400);
       const token = randomToken();
       const expiresAt = new Date(
         Date.now() + config.ADDON_SHARE_TTL_MINUTES * 60_000,

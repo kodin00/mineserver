@@ -104,4 +104,73 @@ describe("isolated demo", () => {
         .requests,
     ).toContainEqual(approved);
   });
+
+  it("serves read-only world, backup and file fixtures", async () => {
+    await call("/api/auth/login", "POST", { role: "admin" });
+    const world = await (await call("/api/servers/survival/world")).json();
+    expect(world).toMatchObject({ levelName: "world", exists: true });
+    expect(world.canImport).toBe(false);
+    const backups = await (await call("/api/servers/survival/backups")).json();
+    expect(backups.length).toBeGreaterThan(0);
+    expect(backups[0]).toEqual(
+      expect.objectContaining({
+        name: expect.any(String),
+        size: expect.any(Number),
+      }),
+    );
+    const root = await (await call("/api/servers/survival/files?path=")).json();
+    expect(root.map((entry: { name: string }) => entry.name)).toEqual(
+      expect.arrayContaining(["config", "server.properties", "world"]),
+    );
+    expect(root[0].type).toBe("directory");
+    const nested = await (
+      await call("/api/servers/survival/files?path=config")
+    ).json();
+    expect(nested[0].path).toBe("config/ferrite-core.mixin.properties");
+    const document = await (
+      await call("/api/servers/survival/files/content?path=server.properties")
+    ).json();
+    expect(document.content).toContain("server-port=25565");
+    expect(typeof document.modifiedAt).toBe("string");
+    const found = await (
+      await call("/api/servers/survival/files/search?q=lithium")
+    ).json();
+    expect(found.map((entry: { path: string }) => entry.path)).toContain(
+      "config/lithium.properties",
+    );
+    expect(
+      (await call("/api/servers/survival/files/content?path=world/level.dat"))
+        .status,
+    ).toBe(404);
+  });
+
+  it("rejects mutations with a clear demo message and no network call", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    await call("/api/auth/login", "POST", { role: "admin" });
+    for (const [path, method, body] of [
+      [
+        "/api/servers/survival/players/actions",
+        "POST",
+        { action: "op", player: "Alex" },
+      ],
+      ["/api/servers/survival/whitelist/actions", "POST", { action: "on" }],
+      [
+        "/api/servers/survival/files/content",
+        "PUT",
+        { path: "ops.json", content: "[]" },
+      ],
+      ["/api/servers/survival/files", "DELETE", undefined],
+      ["/api/servers/survival/actions/backup", "POST", undefined],
+      ["/api/servers/survival/backups/x.tar.gz/restore", "POST", undefined],
+      ["/api/servers/survival/world/import", "POST", undefined],
+    ] as const) {
+      const response = await call(path, method, body);
+      expect(response.status, path).toBe(403);
+      expect((await response.json()).error, path).toMatch(
+        /not available in the demo/,
+      );
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    fetch.mockRestore();
+  });
 });

@@ -38,6 +38,57 @@ function parseRecord(value: string): Record<string, string> {
   return output;
 }
 
+type NumberField =
+  | "port"
+  | "viewDistance"
+  | "simulationDistance"
+  | "maxPlayers"
+  | "idleMinutes"
+  | "retainDays"
+  | "retainCount";
+
+const fieldLabels: Record<string, string> = {
+  port: "Host port",
+  viewDistance: "View distance",
+  simulationDistance: "Simulation distance",
+  maxPlayers: "Maximum players",
+  idleMinutes: "Empty server timeout",
+  retainDays: "Retain days",
+  retainCount: "Retain count",
+  name: "Server name",
+  version: "Minecraft version",
+  initMemory: "Initial RAM",
+  maxMemory: "Maximum RAM",
+  publicAddress: "Public address",
+};
+
+// An empty field becomes NaN so validation reports it as "not a number"
+// instead of silently turning into 0 or falling back to a schema default.
+function parseNumber(text: string): number {
+  return text.trim() === "" ? Number.NaN : Number(text);
+}
+
+function describeError(error: unknown): string {
+  const issues =
+    error && typeof error === "object" && "issues" in error
+      ? (error as { issues: unknown }).issues
+      : null;
+  if (Array.isArray(issues) && issues.length > 0) {
+    return issues
+      .map((issue: { path?: unknown[]; message?: string }) => {
+        const path = (issue.path ?? []).map(String);
+        const key = path[path.length - 1] ?? "";
+        const label = fieldLabels[key] ?? (path.join(" > ") || "Server");
+        const message = /nan|undefined|required/i.test(issue.message ?? "")
+          ? "enter a number"
+          : (issue.message ?? "is invalid");
+        return `${label}: ${message}`;
+      })
+      .join("\n");
+  }
+  return error instanceof Error ? error.message : "Unable to save server";
+}
+
 export function ServerForm({
   initial,
   submitLabel,
@@ -63,8 +114,23 @@ export function ServerForm({
     Object.keys(initial.advancedEnv).length > 0 ||
       Object.keys(initial.customProperties).length > 0,
   );
+  // Number inputs keep their raw text while editing so a field can be emptied
+  // and retyped; the text is parsed on submit.
+  const [numbers, setNumbers] = useState<Record<NumberField, string>>({
+    port: String(initial.port),
+    viewDistance: String(initial.viewDistance),
+    simulationDistance: String(initial.simulationDistance),
+    maxPlayers: String(initial.maxPlayers),
+    idleMinutes: String(initial.autoSleep.idleMinutes),
+    retainDays: String(initial.backups.retainDays),
+    retainCount: String(initial.backups.retainCount),
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  function setNumber(key: NumberField, text: string) {
+    setNumbers((current) => ({ ...current, [key]: text }));
+  }
 
   function set<K extends keyof ServerConfig>(key: K, next: ServerConfig[K]) {
     setValue((current) => ({ ...current, [key]: next }));
@@ -77,14 +143,25 @@ export function ServerForm({
     try {
       const parsed = ServerConfigSchema.parse({
         ...value,
+        port: parseNumber(numbers.port),
+        viewDistance: parseNumber(numbers.viewDistance),
+        simulationDistance: parseNumber(numbers.simulationDistance),
+        maxPlayers: parseNumber(numbers.maxPlayers),
+        autoSleep: {
+          ...value.autoSleep,
+          idleMinutes: parseNumber(numbers.idleMinutes),
+        },
+        backups: {
+          ...value.backups,
+          retainDays: parseNumber(numbers.retainDays),
+          retainCount: parseNumber(numbers.retainCount),
+        },
         advancedEnv: parseRecord(advancedEnv),
         customProperties: parseRecord(customProperties),
       });
       await onSubmit(parsed, acceptEula);
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Unable to save server",
-      );
+      setError(describeError(error));
     } finally {
       setSaving(false);
     }
@@ -159,8 +236,8 @@ export function ServerForm({
               type="number"
               min={1024}
               max={65535}
-              value={value.port}
-              onChange={(event) => set("port", Number(event.target.value))}
+              value={numbers.port}
+              onChange={(event) => setNumber("port", event.target.value)}
             />
           </label>
           <label>
@@ -214,9 +291,9 @@ export function ServerForm({
               type="number"
               min={2}
               max={64}
-              value={value.viewDistance}
+              value={numbers.viewDistance}
               onChange={(event) =>
-                set("viewDistance", Number(event.target.value))
+                setNumber("viewDistance", event.target.value)
               }
             />
           </label>
@@ -226,9 +303,9 @@ export function ServerForm({
               type="number"
               min={2}
               max={64}
-              value={value.simulationDistance}
+              value={numbers.simulationDistance}
               onChange={(event) =>
-                set("simulationDistance", Number(event.target.value))
+                setNumber("simulationDistance", event.target.value)
               }
             />
           </label>
@@ -238,10 +315,8 @@ export function ServerForm({
               type="number"
               min={1}
               max={1000}
-              value={value.maxPlayers}
-              onChange={(event) =>
-                set("maxPlayers", Number(event.target.value))
-              }
+              value={numbers.maxPlayers}
+              onChange={(event) => setNumber("maxPlayers", event.target.value)}
             />
           </label>
         </div>
@@ -276,13 +351,8 @@ export function ServerForm({
               min={1}
               max={7 * 24 * 60}
               disabled={!value.autoSleep.enabled}
-              value={value.autoSleep.idleMinutes}
-              onChange={(event) =>
-                set("autoSleep", {
-                  ...value.autoSleep,
-                  idleMinutes: Number(event.target.value),
-                })
-              }
+              value={numbers.idleMinutes}
+              onChange={(event) => setNumber("idleMinutes", event.target.value)}
             />
             <small>
               The first join wakes the server. Startup can take up to a minute.
@@ -395,13 +465,8 @@ export function ServerForm({
             <input
               type="number"
               min={1}
-              value={value.backups.retainDays}
-              onChange={(event) =>
-                set("backups", {
-                  ...value.backups,
-                  retainDays: Number(event.target.value),
-                })
-              }
+              value={numbers.retainDays}
+              onChange={(event) => setNumber("retainDays", event.target.value)}
             />
           </label>
           <label>
@@ -409,13 +474,8 @@ export function ServerForm({
             <input
               type="number"
               min={1}
-              value={value.backups.retainCount}
-              onChange={(event) =>
-                set("backups", {
-                  ...value.backups,
-                  retainCount: Number(event.target.value),
-                })
-              }
+              value={numbers.retainCount}
+              onChange={(event) => setNumber("retainCount", event.target.value)}
             />
           </label>
         </div>

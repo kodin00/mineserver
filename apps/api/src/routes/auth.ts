@@ -12,7 +12,15 @@ import { instancePaths } from "../compose.js";
 import { config } from "../config.js";
 import type { AppContext } from "../app.js";
 import { CSRF_COOKIE, SESSION_COOKIE, rowConfig } from "../helpers.js";
-import { randomToken, sha256 } from "../utils.js";
+import { httpError, randomToken, sha256 } from "../utils.js";
+
+/**
+ * Argon2id hash (default parameters) of a discarded random value. Verified
+ * against when no real credential applies so a login attempt costs the same
+ * whether or not player access is enabled or an administrator exists.
+ */
+const DUMMY_PASSWORD_HASH =
+  "$argon2id$v=19$m=19456,t=2,p=1$NogDgBEOJMnBEzlebXaE6g$MMdrLTH0Mrx96o/PSrVsctEUqtt4KkgXoo4LiCxs/P8";
 
 export async function authRoutes(
   app: FastifyInstance,
@@ -107,7 +115,11 @@ export async function authRoutes(
           : store.getPlayerAccess().enabled
             ? store.getPlayerAccess().password_hash
             : null;
-      if (!credential || !(await verify(credential, body.password))) {
+      if (!credential) {
+        await verify(DUMMY_PASSWORD_HASH, body.password).catch(() => false);
+        return reply.code(401).send({ error: "Invalid password" });
+      }
+      if (!(await verify(credential, body.password))) {
         return reply.code(401).send({ error: "Invalid password" });
       }
       // Password verification is asynchronous. A rotation or disablement that
@@ -177,7 +189,7 @@ export async function authRoutes(
       ? await hash(body.password)
       : previous.password_hash;
     if (body.enabled && !passwordHash)
-      throw new Error("Set a player password before enabling access");
+      throw httpError("Set a player password before enabling access", 400);
     store.setPlayerAccess(body.enabled, passwordHash);
     return { enabled: body.enabled, hasPassword: !!passwordHash };
   });

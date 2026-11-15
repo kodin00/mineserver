@@ -48,9 +48,13 @@ export async function consoleRoutes(
   let metadataCache: { value: Metadata; expires: number } | null = null;
   app.get("/api/metadata", async () => {
     if (!metadataCache || metadataCache.expires < Date.now()) {
+      const value = await fetchMetadata();
+      // A failed upstream fetch yields empty data; keep it only briefly so one
+      // transient outage does not blank the version list for an hour.
+      const complete = value.versions.length > 0 && value.imageTags !== null;
       metadataCache = {
-        value: await fetchMetadata(),
-        expires: Date.now() + 60 * 60_000,
+        value,
+        expires: Date.now() + (complete ? 60 * 60_000 : 30_000),
       };
     }
     // Read outside the cached payload so toggling the flag takes effect at once.

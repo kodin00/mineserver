@@ -270,132 +270,142 @@ export function InstallDialog({
           </a>
         </div>
 
-        <p className="muted install-dialog-description">{description}</p>
+        <div className="install-dialog-body">
+          <p className="muted install-dialog-description">{description}</p>
 
-        {error && <ErrorBanner message={error} />}
+          {error && <ErrorBanner message={error} />}
 
-        {installedProject && (
-          <p className="notice-banner">
-            Currently installed: {installedProject.versionNumber} (
-            {installedProject.filename}). Review and select one compatible
-            version below before updating.
-          </p>
-        )}
+          {installedProject && (
+            <p className="notice-banner">
+              Currently installed: {installedProject.versionNumber} (
+              {installedProject.filename}). Review and select one compatible
+              version below before updating.
+            </p>
+          )}
 
-        {noRelease && (
-          <p className="notice-banner">
-            This project has no stable release for your server. The newest
-            pre-release is selected instead.
-          </p>
-        )}
+          {noRelease && (
+            <p className="notice-banner">
+              This project has no stable release for your server. The newest
+              pre-release is selected instead.
+            </p>
+          )}
 
-        {loading ? (
-          <p className="muted">
-            <LoaderCircle className="spin" size={15} /> Loading versions…
-          </p>
-        ) : versions.length === 0 ? (
-          <p className="muted">
-            No compatible versions for {server.config.type.toLowerCase()}
-            {gameVersion === "LATEST" || gameVersion === "SNAPSHOT"
-              ? ""
-              : ` ${gameVersion}`}
-            .
-          </p>
-        ) : (
-          <>
-            <h3 className="install-dialog-subhead">Version</h3>
-            <ul className="explorer-list install-version-list">
-              {versions.map((version) => {
-                const file = primaryFile(version);
-                const installed = installedProject
-                  ? version.id === installedProject.versionId
-                  : isVersionInstalled(file?.filename ?? null, installedNames);
-                return (
-                  <li key={version.id}>
-                    <button
-                      className={`explorer-row${
-                        version.id === selected ? " selected" : ""
-                      }`}
-                      onClick={() => setSelected(version.id)}
-                      disabled={installed}
-                    >
-                      <span className="install-version-name">
-                        <strong>{version.versionNumber}</strong>
-                        <span className={`channel-pill ${version.versionType}`}>
-                          {describeVersionChannel(version.versionType)}
-                        </span>
-                        {installed && (
-                          <span className="enabled-pill">
-                            Already installed
+          {loading ? (
+            <p className="muted">
+              <LoaderCircle className="spin" size={15} /> Loading versions…
+            </p>
+          ) : versions.length === 0 ? (
+            <p className="muted">
+              No compatible versions for {server.config.type.toLowerCase()}
+              {gameVersion === "LATEST" || gameVersion === "SNAPSHOT"
+                ? ""
+                : ` ${gameVersion}`}
+              .
+            </p>
+          ) : (
+            <>
+              <h3 className="install-dialog-subhead">Version</h3>
+              <ul className="explorer-list install-version-list">
+                {versions.map((version) => {
+                  const file = primaryFile(version);
+                  const installed = installedProject
+                    ? version.id === installedProject.versionId
+                    : isVersionInstalled(
+                        file?.filename ?? null,
+                        installedNames,
+                      );
+                  return (
+                    <li key={version.id}>
+                      <button
+                        className={`explorer-row${
+                          version.id === selected ? " selected" : ""
+                        }`}
+                        onClick={() => setSelected(version.id)}
+                        disabled={installed}
+                      >
+                        <span className="install-version-name">
+                          <strong>{version.versionNumber}</strong>
+                          <span
+                            className={`channel-pill ${version.versionType}`}
+                          >
+                            {describeVersionChannel(version.versionType)}
                           </span>
-                        )}
-                      </span>
-                      <small className="muted">
-                        {version.loaders.join(", ")} ·{" "}
-                        {version.gameVersions.slice(0, 4).join(", ")}
-                        {file ? ` · ${formatBytes(file.size)}` : ""}
-                      </small>
-                    </button>
+                          {installed && (
+                            <span className="enabled-pill">
+                              Already installed
+                            </span>
+                          )}
+                        </span>
+                        <small className="muted">
+                          {version.loaders.join(", ")} ·{" "}
+                          {version.gameVersions.slice(0, 4).join(", ")}
+                          {file ? ` · ${formatBytes(file.size)}` : ""}
+                        </small>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+
+          {installedProject && previewing && (
+            <p className="muted">
+              <LoaderCircle className="spin" size={15} /> Reviewing update…
+            </p>
+          )}
+
+          {installedProject && preview && (
+            <div className="notice-banner">
+              <strong>Update review</strong>
+              <br />
+              {preview.current.versionNumber} →{" "}
+              {preview.candidate.versionNumber}
+              <br />
+              {preview.filenameChanges
+                ? `${preview.current.filename} → ${preview.candidate.filename}`
+                : preview.candidate.filename}
+            </div>
+          )}
+
+          {required.length > 0 && !onRequestSelection && (
+            <>
+              <h3 className="install-dialog-subhead">Required dependencies</h3>
+              <label className="install-dependency-toggle">
+                <input
+                  type="checkbox"
+                  checked={withDependencies}
+                  onChange={(event) =>
+                    setWithDependencies(event.target.checked)
+                  }
+                />
+                Also install {required.length} required{" "}
+                {required.length === 1 ? "dependency" : "dependencies"}
+              </label>
+              <ul className="file-list">
+                {required.map((entry, index) => (
+                  <li
+                    className="file-row"
+                    key={entry.projectId ?? entry.versionId ?? index}
+                  >
+                    <Package size={15} className="file-icon" />
+                    <span>
+                      {entry.title ??
+                        entry.projectId ??
+                        "Unidentified dependency"}
+                    </span>
                   </li>
-                );
-              })}
-            </ul>
-          </>
-        )}
-
-        {installedProject && previewing && (
-          <p className="muted">
-            <LoaderCircle className="spin" size={15} /> Reviewing update…
-          </p>
-        )}
-
-        {installedProject && preview && (
-          <div className="notice-banner">
-            <strong>Update review</strong>
-            <br />
-            {preview.current.versionNumber} → {preview.candidate.versionNumber}
-            <br />
-            {preview.filenameChanges
-              ? `${preview.current.filename} → ${preview.candidate.filename}`
-              : preview.candidate.filename}
-          </div>
-        )}
-
-        {required.length > 0 && !onRequestSelection && (
-          <>
-            <h3 className="install-dialog-subhead">Required dependencies</h3>
-            <label className="install-dependency-toggle">
-              <input
-                type="checkbox"
-                checked={withDependencies}
-                onChange={(event) => setWithDependencies(event.target.checked)}
-              />
-              Also install {required.length} required{" "}
-              {required.length === 1 ? "dependency" : "dependencies"}
-            </label>
-            <ul className="file-list">
-              {required.map((entry, index) => (
-                <li
-                  className="file-row"
-                  key={entry.projectId ?? entry.versionId ?? index}
-                >
-                  <Package size={15} className="file-icon" />
-                  <span>
-                    {entry.title ??
-                      entry.projectId ??
-                      "Unidentified dependency"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            {unidentified && (
-              <p className="notice-banner">
-                One dependency could not be identified. The install may still
-                need a manual step.
-              </p>
-            )}
-          </>
-        )}
+                ))}
+              </ul>
+              {unidentified && (
+                <p className="notice-banner">
+                  One dependency could not be identified. The install may still
+                  need a manual step.
+                </p>
+              )}
+            </>
+          )}
+        </div>
 
         <div className="dialog-actions">
           <button className="button ghost" onClick={onClose}>

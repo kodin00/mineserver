@@ -18,7 +18,7 @@ import type { InstancePaths } from "./compose.js";
 import { config } from "./config.js";
 import { resolveLevelName } from "./datapacks.js";
 import type { ComposeManager } from "./docker.js";
-import { pathExists, resolveWithin } from "./utils.js";
+import { httpError, pathExists, resolveWithin } from "./utils.js";
 
 const minecraftUid = 1000;
 const minecraftGid = 1000;
@@ -71,7 +71,8 @@ function openZip(filename: string): Promise<ZipFile> {
         strictFileNames: true,
       },
       (error, zip) => {
-        if (error || !zip) reject(error ?? new Error("Unable to open ZIP"));
+        if (error || !zip)
+          reject(httpError(error?.message ?? "Unable to open ZIP", 400));
         else resolve(zip);
       },
     );
@@ -85,7 +86,7 @@ function entryStream(
   return new Promise((resolve, reject) => {
     zip.openReadStream(entry, (error, stream) => {
       if (error || !stream) {
-        reject(error ?? new Error("Unable to read ZIP entry"));
+        reject(httpError(error?.message ?? "Unable to read ZIP entry", 400));
       } else {
         resolve(stream);
       }
@@ -101,11 +102,11 @@ function normalizedZipPath(name: string): string {
     replaced.startsWith("/") ||
     /^[A-Za-z]:/.test(replaced)
   ) {
-    throw new Error(`Unsafe ZIP path: ${name}`);
+    throw httpError(`Unsafe ZIP path: ${name}`, 400);
   }
   const segments = replaced.split("/").filter(Boolean);
   if (!segments.length || segments.some((segment) => segment === "..")) {
-    throw new Error(`Unsafe ZIP path: ${name}`);
+    throw httpError(`Unsafe ZIP path: ${name}`, 400);
   }
   return segments.join("/");
 }
@@ -114,15 +115,22 @@ function entryKind(entry: Entry): "file" | "directory" {
   const mode = (entry.externalFileAttributes >>> 16) & 0xffff;
   const unixType = mode & 0o170000;
   if (unixType === 0o120000) {
-    throw new Error(`World ZIP contains a symbolic link: ${entry.fileName}`);
+    throw httpError(
+      `World ZIP contains a symbolic link: ${entry.fileName}`,
+      400,
+    );
   }
   if (unixType && unixType !== 0o100000 && unixType !== 0o040000) {
-    throw new Error(`World ZIP contains a special entry: ${entry.fileName}`);
+    throw httpError(
+      `World ZIP contains a special entry: ${entry.fileName}`,
+      400,
+    );
   }
   const directory = entry.fileName.endsWith("/") || unixType === 0o040000;
   if (directory && entry.uncompressedSize !== 0) {
-    throw new Error(
+    throw httpError(
       `World ZIP contains an invalid directory: ${entry.fileName}`,
+      400,
     );
   }
   return directory ? "directory" : "file";
@@ -190,13 +198,14 @@ export async function inspectWorldZip(
       zip.on("entry", (entry: Entry) => {
         try {
           if (encryptedEntry(entry)) {
-            throw new Error("Encrypted world ZIPs are not supported");
+            throw httpError("Encrypted world ZIPs are not supported", 400);
           }
           const normalized = normalizedZipPath(entry.fileName);
           const key = normalized.toLowerCase();
           if (seen.has(key)) {
-            throw new Error(
+            throw httpError(
               `World ZIP contains a duplicate path: ${normalized}`,
+              400,
             );
           }
           seen.add(key);
@@ -205,28 +214,34 @@ export async function inspectWorldZip(
           for (let index = 1; index < segments.length; index += 1) {
             const ancestor = segments.slice(0, index).join("/");
             if (files.has(ancestor)) {
-              throw new Error(
+              throw httpError(
                 `World ZIP contains a file/directory conflict: ${normalized}`,
+                400,
               );
             }
           }
           if (!directory) {
             const descendantPrefix = `${key}/`;
             if ([...seen].some((other) => other.startsWith(descendantPrefix))) {
-              throw new Error(
+              throw httpError(
                 `World ZIP contains a file/directory conflict: ${normalized}`,
+                400,
               );
             }
             files.add(key);
             fileCount += 1;
             expandedBytes += entry.uncompressedSize;
             if (fileCount > config.MAX_ZIP_FILES) {
-              throw new Error(
+              throw httpError(
                 `World ZIP contains more than ${config.MAX_ZIP_FILES} files`,
+                400,
               );
             }
             if (expandedBytes > config.MAX_ZIP_EXPANDED_BYTES) {
-              throw new Error("World ZIP expands beyond the configured limit");
+              throw httpError(
+                "World ZIP expands beyond the configured limit",
+                400,
+              );
             }
           }
           entries.push({
@@ -251,18 +266,18 @@ export async function inspectWorldZip(
       !directory && path.posix.basename(normalized) === "level.dat",
   );
   if (levelData.length === 0) {
-    throw new Error("World ZIP must contain level.dat at its root");
+    throw httpError("World ZIP must contain level.dat at its root", 400);
   }
   if (levelData.length > 1) {
-    throw new Error("World ZIP contains multiple possible world roots");
+    throw httpError("World ZIP contains multiple possible world roots", 400);
   }
   if (levelData[0]!.entry.uncompressedSize === 0) {
-    throw new Error("World ZIP contains an empty level.dat");
+    throw httpError("World ZIP contains an empty level.dat", 400);
   }
 
   const segments = levelData[0]!.normalized.split("/");
   if (segments.length > 2) {
-    throw new Error("World ZIP may use at most one wrapper directory");
+    throw httpError("World ZIP may use at most one wrapper directory", 400);
   }
   const root = segments.length === 1 ? "" : segments[0]!;
   for (const item of entries) {
@@ -271,7 +286,10 @@ export async function inspectWorldZip(
     if (item.normalized === root || item.normalized.startsWith(`${root}/`)) {
       continue;
     }
-    throw new Error("World ZIP contains files outside its world directory");
+    throw httpError(
+      "World ZIP contains files outside its world directory",
+      400,
+    );
   }
   return { root, entries };
 }
@@ -320,7 +338,10 @@ export async function extractInspectedWorld(
             !sameEntryMetadata(entry, expected.immutable) ||
             (entryKind(entry) === "directory") !== expected.directory
           ) {
-            throw new Error("World ZIP changed while it was being inspected");
+            throw httpError(
+              "World ZIP changed while it was being inspected",
+              400,
+            );
           }
           const withinRoot = inspected.root
             ? normalized.startsWith(`${inspected.root}/`)
@@ -336,8 +357,12 @@ export async function extractInspectedWorld(
             ...withinRoot.split("/").filter(Boolean),
           );
           const relative = path.relative(destination, target);
-          if (relative.startsWith("..") || path.isAbsolute(relative)) {
-            throw new Error(`Unsafe ZIP path: ${entry.fileName}`);
+          if (
+            relative === ".." ||
+            relative.startsWith(`..${path.sep}`) ||
+            path.isAbsolute(relative)
+          ) {
+            throw httpError(`Unsafe ZIP path: ${entry.fileName}`, 400);
           }
           if (expected.directory) {
             await mkdir(target, { recursive: true });
@@ -349,8 +374,9 @@ export async function extractInspectedWorld(
               fileCount > config.MAX_ZIP_FILES ||
               expandedBytes > config.MAX_ZIP_EXPANDED_BYTES
             ) {
-              throw new Error(
+              throw httpError(
                 "World ZIP exceeds the configured extraction limit",
+                400,
               );
             }
             await mkdir(path.dirname(target), { recursive: true });
@@ -414,7 +440,7 @@ export async function worldInfo(
   if (await pathExists(world)) {
     const info = await lstat(world);
     if (!info.isDirectory() || info.isSymbolicLink()) {
-      throw new Error("The active world path is not a regular directory");
+      throw httpError("The active world path is not a regular directory", 409);
     }
     exists = true;
     const summary = await directorySummary(world);
@@ -512,7 +538,7 @@ export async function importWorld(
       () => null,
     );
     if (!levelData?.isFile() || levelData.size === 0) {
-      throw new Error("World ZIP contains no usable level.dat");
+      throw httpError("World ZIP contains no usable level.dat", 400);
     }
     // The panel mutation lease blocks starts and file-manager writes issued by
     // this process. An administrator invoking Docker directly can still race
@@ -528,15 +554,28 @@ export async function importWorld(
     if (await pathExists(activeWorld)) {
       const current = await lstat(activeWorld);
       if (!current.isDirectory() || current.isSymbolicLink()) {
-        throw new Error("The active world path is not a regular directory");
+        throw httpError(
+          "The active world path is not a regular directory",
+          409,
+        );
       }
       await fileOperations.rename(activeWorld, rollback);
       movedCurrent = true;
     }
     await fileOperations.rename(staging, activeWorld);
     installed = true;
-    await fileOperations.remove(rollback, { recursive: true, force: true });
+    // The swap is complete. Failing to delete the old world from here on must
+    // not trigger recovery, which would discard the freshly installed world.
     movedCurrent = false;
+    try {
+      await fileOperations.remove(rollback, { recursive: true, force: true });
+    } catch (cleanupError) {
+      rollbackPreserved = true;
+      console.error(
+        `World import succeeded but the rollback directory ${rollback} could not be removed`,
+        cleanupError,
+      );
+    }
     return `Imported world ${levelName}. The server remains stopped.`;
   } catch (error) {
     try {

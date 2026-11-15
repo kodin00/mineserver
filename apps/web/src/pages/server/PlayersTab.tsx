@@ -172,17 +172,26 @@ export function PlayersTab({ server }: { server: ServerSummary }) {
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
   const available = server.state === "running";
+  const latestLoad = useRef(0);
 
   const load = useCallback(async () => {
+    // Only the newest request may paint, so a slow response cannot resurrect
+    // the list after the server stopped or another refresh finished.
+    const request = ++latestLoad.current;
     if (!available) {
       setPlayers(null);
+      setLoading(false);
       return;
     }
     setLoading(true);
     setError("");
     try {
-      setPlayers(await api<OnlinePlayers>(`/api/servers/${server.id}/players`));
+      const next = await api<OnlinePlayers>(
+        `/api/servers/${server.id}/players`,
+      );
+      if (request === latestLoad.current) setPlayers(next);
     } catch (caught) {
+      if (request !== latestLoad.current) return;
       setPlayers(null);
       setError(
         caught instanceof Error
@@ -190,7 +199,7 @@ export function PlayersTab({ server }: { server: ServerSummary }) {
           : "Unable to load online players",
       );
     } finally {
-      setLoading(false);
+      if (request === latestLoad.current) setLoading(false);
     }
   }, [available, server.id]);
 
@@ -283,7 +292,11 @@ export function PlayersTab({ server }: { server: ServerSummary }) {
       {reasonFor && (
         <dialog
           className="confirmation-dialog"
-          open
+          ref={(dialog) => {
+            // A bare `open` attribute renders a non-modal dialog (no backdrop,
+            // no focus containment, Escape never fires onCancel).
+            if (dialog && !dialog.open) dialog.showModal();
+          }}
           aria-labelledby="player-reason-title"
           onCancel={(event) => {
             event.preventDefault();

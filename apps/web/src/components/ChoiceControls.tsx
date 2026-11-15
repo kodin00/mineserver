@@ -265,9 +265,11 @@ export function Combobox({
 
   useDismissablePopup(open, setOpen, rootRef, inputRef);
 
+  // Nothing is highlighted until the user arrows (or hovers) to an option, so
+  // Enter keeps the typed text instead of silently taking the first match.
   useEffect(() => {
     if (!open) return;
-    setActiveIndex(edgeEnabledIndex(filtered, "first"));
+    setActiveIndex(-1);
   }, [filtered, open]);
 
   function choose(index: number) {
@@ -293,11 +295,11 @@ export function Combobox({
         setOpen(true);
         return;
       }
-      const index = nextEnabledIndex(
-        filtered,
-        activeIndex,
-        event.key === "ArrowDown" ? 1 : -1,
-      );
+      const down = event.key === "ArrowDown";
+      const index =
+        activeIndex < 0
+          ? edgeEnabledIndex(filtered, down ? "first" : "last")
+          : nextEnabledIndex(filtered, activeIndex, down ? 1 : -1);
       activate(index);
     } else if (event.key === "Home" && open) {
       event.preventDefault();
@@ -344,6 +346,9 @@ export function Combobox({
         className="combobox-toggle"
         aria-label={open ? "Hide suggestions" : "Show suggestions"}
         tabIndex={-1}
+        // Keep focus in the input: focusing it re-opens the list via onFocus,
+        // which made this toggle unable to close an open list.
+        onMouseDown={(event) => event.preventDefault()}
         onClick={() => {
           setOpen((current) => !current);
           inputRef.current?.focus();

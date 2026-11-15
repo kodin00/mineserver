@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Blocks,
@@ -52,6 +52,7 @@ export function ServerPage() {
   const { role } = useAuth();
   const demo = import.meta.env.VITE_DEMO === "true";
   const [copyMessage, setCopyMessage] = useState("");
+  const copyTimer = useRef<number | undefined>(undefined);
   const [pending, setPending] = useState(0);
   const { id = "" } = useParams();
   const [search, setSearch] = useSearchParams();
@@ -59,6 +60,12 @@ export function ServerPage() {
   const [server, setServer] = useState<ServerSummary | null>(null);
   const [marketplaceEnabled, setMarketplaceEnabled] = useState(true);
   const [error, setError] = useState("");
+  function showCopyMessage(message: string) {
+    setCopyMessage(message);
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopyMessage(""), 4000);
+  }
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
   // Switching servers must not keep showing the previous server's summary.
   useEffect(() => {
     setServer(null);
@@ -77,23 +84,22 @@ export function ServerPage() {
     };
   }, []);
 
+  const currentId = useRef(id);
+  currentId.current = id;
   const load = useCallback(async () => {
     // Fast server switching re-renders this component with a new id; drop
     // responses that arrive after the switch so we never render or control
     // the wrong server.
-    let cancelled = false;
     try {
       const summary = await api<ServerSummary>(`/api/servers/${id}`);
-      if (cancelled) return;
+      if (currentId.current !== id) return;
       setServer(summary);
       setError("");
     } catch (error) {
-      if (cancelled) return;
+      if (currentId.current !== id) return;
       setError(
         error instanceof Error ? error.message : "Unable to load server",
       );
-    } finally {
-      cancelled = true;
     }
   }, [id]);
 
@@ -130,8 +136,7 @@ export function ServerPage() {
     ([key]) =>
       (marketplaceEnabled || key !== "browse") &&
       (role === "admin" || ["overview", "browse", "requests"].includes(key)) &&
-      (!demo ||
-        !["console", "world", "addons", "backups", "files"].includes(key)),
+      (!demo || !["console", "addons"].includes(key)),
   );
   const activeTab = visibleTabs.some(([key]) => key === tab) ? tab : "overview";
 
@@ -191,6 +196,7 @@ export function ServerPage() {
           <button
             key={key}
             className={activeTab === key ? "active" : ""}
+            aria-current={activeTab === key ? "page" : undefined}
             onClick={() => setSearch(key === "overview" ? {} : { tab: key })}
           >
             <Icon size={17} /> {label}
@@ -217,14 +223,14 @@ export function ServerPage() {
               className="button ghost"
               onClick={() => {
                 if (!navigator.clipboard) {
-                  setCopyMessage("Select and copy the address above.");
+                  showCopyMessage("Select and copy the address above.");
                   return;
                 }
                 void navigator.clipboard
                   .writeText(server.config.publicAddress)
-                  .then(() => setCopyMessage("Address copied."))
+                  .then(() => showCopyMessage("Address copied."))
                   .catch(() =>
-                    setCopyMessage("Select and copy the address above."),
+                    showCopyMessage("Select and copy the address above."),
                   );
               }}
             >

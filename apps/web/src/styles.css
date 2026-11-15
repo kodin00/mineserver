@@ -523,6 +523,7 @@ textarea {
   color: #c68f8d;
 }
 .error-banner {
+  white-space: pre-line;
   color: #ffc6c3;
   background: #35191a;
   border: 1px solid #642b2d;
@@ -843,6 +844,10 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.backup-row strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .operation-row small,
 .file-row small {
@@ -1980,8 +1985,47 @@ label small {
   justify-content: space-between;
   gap: 12px;
 }
+.install-dialog {
+  width: min(760px, calc(100% - 28px));
+  max-height: calc(100dvh - 28px);
+  overflow: hidden;
+}
 .install-dialog .dialog-card {
-  width: min(680px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100dvh - 28px);
+  overflow: hidden;
+}
+.install-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.install-dialog-body > * {
+  flex: none;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.install-dialog .dialog-actions {
+  flex: none;
+}
+.install-dialog ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.install-dialog-header > div {
+  min-width: 0;
+}
+@media (max-width: 560px) {
+  .install-dialog .dialog-card {
+    padding: 16px;
+  }
 }
 .install-dialog-header {
   display: flex;
@@ -2004,9 +2048,10 @@ label small {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.install-version-list {
-  max-height: 46vh;
-  overflow: auto;
+/* The dialog body is the only scroll area; .explorer-list would nest another. */
+.explorer-list.install-version-list {
+  max-height: none;
+  overflow: visible;
 }
 .install-version-name {
   display: inline-flex;
@@ -2093,12 +2138,30 @@ label small {
   }
 }
 @media (max-width: 620px) {
+  .world-summary {
+    flex-wrap: wrap;
+  }
+  .world-summary > div {
+    flex: 1 1 calc(100% - 80px);
+  }
+  .world-summary > .button {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
   .page {
     width: min(100% - 28px, 1240px);
     padding-top: 28px;
   }
   .topbar {
-    padding: 0 14px;
+    height: auto;
+    min-height: 68px;
+    padding: 8px 14px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .top-actions {
+    margin-left: auto;
+    justify-content: flex-end;
   }
   .page-heading {
     flex-direction: column;
