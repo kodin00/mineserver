@@ -12,6 +12,10 @@ export ADMIN_PASSWORD
 ADMIN_PASSWORD=$(openssl rand -hex 32)
 
 cleanup() {
+  result=$?
+  if [[ "$result" -ne 0 ]]; then
+    docker compose -p "$project" logs --no-color --tail=80 api >&2 || true
+  fi
   docker compose -p "$project" down --remove-orphans >/dev/null 2>&1 || true
   sudo rm -rf -- "$data_root"
 }

@@ -12,7 +12,7 @@ Requires a Linux machine with [Docker Engine](https://docs.docker.com/engine/ins
 curl -fsSL https://raw.githubusercontent.com/kodin00/mineserver/master/install.sh | sh
 ```
 
-This creates a `mineserver` folder, pulls the images from GHCR, and starts the panel. Sign in at `http://localhost:8080` with the default password `mineserver123!`. To use a different password, set `ADMIN_PASSWORD` in `mineserver/.env` before the first start.
+This creates a `mineserver` folder, pulls the images from GHCR, and starts the panel. The installer generates a random `ADMIN_PASSWORD` and saves it in `mineserver/.env`; use that password to sign in at `http://localhost:8080`. To use a different password, set `ADMIN_PASSWORD` in `mineserver/.env` before the first start.
 
 Worlds, backups, and panel data are saved in `/opt/mineserver`, so they survive container restarts and updates.
 
@@ -42,6 +42,8 @@ To reach the panel from another machine, set `PANEL_BIND=0.0.0.0` in `.env` and 
 ## Security notes
 
 This panel can control Docker on its host. Keep it on a trusted network. It binds to `127.0.0.1` by default; set `PANEL_BIND=0.0.0.0` to open it to your LAN. For remote access, put it behind an HTTPS reverse proxy, set `COOKIE_SECURE=true`, and use a firewall or VPN. Do not expose the API service or Minecraft RCON ports directly.
+
+The API service runs as root in the supplied Compose configuration to access the host Docker socket and its data directory. Access to this panel grants administrative control over the Docker host.
 
 ## Common settings
 
@@ -112,6 +114,18 @@ docker compose up -d --build
 ```
 
 After an upgrade, open the panel and apply or restart each existing server once if it is marked as awaiting apply.
+
+### Recovering from a data-directory permission error
+
+If an older installation reports `EACCES` while creating `/opt/mineserver/instances`, refresh the Compose configuration and recreate the panel containers:
+
+```sh
+cd ~/mineserver
+curl -fsSLo compose.yaml https://raw.githubusercontent.com/kodin00/mineserver/master/compose.yaml
+docker compose up -d --force-recreate
+```
+
+This retains the existing `.env` file and server data. If startup still fails, inspect `docker compose logs --tail=80 api`.
 
 ## Local development
 

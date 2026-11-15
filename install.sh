@@ -34,6 +34,14 @@ fi
 
 data_root="$(grep '^MINESERVER_DATA_ROOT=' .env | cut -d= -f2- || true)"
 : "${data_root:=/opt/mineserver}"
-sudo mkdir -p "$data_root"
+if [ "$(id -u)" -eq 0 ]; then
+  mkdir -p "$data_root"
+else
+  sudo mkdir -p "$data_root"
+fi
 docker compose pull
-docker compose up -d
+if ! docker compose up -d; then
+  echo "Mineserver failed to start. API logs:" >&2
+  docker compose logs --tail=80 api >&2 || true
+  exit 1
+fi

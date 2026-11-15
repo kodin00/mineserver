@@ -4,6 +4,9 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    # This service administers the host Docker daemon and a root-owned bind
+    # mount. Use root explicitly so both are accessible on a fresh Linux host.
+    user: "0:0"
     restart: unless-stopped
     logging: &logging
       driver: json-file
