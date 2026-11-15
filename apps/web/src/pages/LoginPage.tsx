@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Box, LoaderCircle, LockKeyhole } from "lucide-react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
+import { Select } from "../components/ChoiceControls";
 import { ErrorBanner } from "../components/Layout";
 
 export function LoginPage() {
@@ -49,15 +50,15 @@ export function LoginPage() {
         {error && <ErrorBanner message={error} />}
         <label>
           Sign in as
-          <select
+          <Select<"admin" | "player">
             value={role}
-            onChange={(event) =>
-              setRole(event.target.value as "admin" | "player")
-            }
-          >
-            <option value="admin">Administrator</option>
-            <option value="player">Player</option>
-          </select>
+            ariaLabel="Sign in as"
+            options={[
+              { value: "admin", label: "Administrator" },
+              { value: "player", label: "Player" },
+            ]}
+            onChange={setRole}
+          />
         </label>
         {!demo && (
           <label>

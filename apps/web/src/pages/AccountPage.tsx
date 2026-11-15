@@ -10,6 +10,7 @@ import { Link, useNavigate } from "react-router-dom";
 import type { MarketplaceSettings } from "@mineserver/shared";
 import { api, jsonBody } from "../api";
 import { useAuth } from "../auth";
+import { Switch } from "../components/FormControls";
 import { ErrorBanner, Layout } from "../components/Layout";
 
 export function AccountPage() {
@@ -200,15 +201,15 @@ function MarketplaceSettingsCard() {
       {error && <ErrorBanner message={error} />}
       {saved && <p className="notice-banner">{saved}</p>}
 
-      <label className="settings-toggle">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => setEnabled(event.target.checked)}
-        />
+      <Switch
+        className="settings-toggle"
+        controlFirst
+        checked={enabled}
+        onChange={setEnabled}
+      >
         Enable the marketplace. Turn it off for an air-gapped panel and nothing
         will contact Modrinth.
-      </label>
+      </Switch>
 
       <label>
         Contact details (optional)
@@ -333,14 +334,14 @@ function PlayerAccessCard() {
       </div>
       {error && <ErrorBanner message={error} />}
       {saved && <p className="notice-banner">{saved}</p>}
-      <label className="settings-toggle">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => setEnabled(event.target.checked)}
-        />{" "}
+      <Switch
+        className="settings-toggle"
+        controlFirst
+        checked={enabled}
+        onChange={setEnabled}
+      >
         Enable player sign-in
-      </label>
+      </Switch>
       <label>
         Player password
         <input

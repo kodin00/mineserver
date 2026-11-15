@@ -3,6 +3,7 @@ import { AlertTriangle, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { ServerConfig, ServerSummary } from "@mineserver/shared";
 import { api, jsonBody } from "../../api";
+import { Checkbox } from "../../components/FormControls";
 import { ErrorBanner } from "../../components/Layout";
 import { ServerForm } from "../../components/ServerForm";
 
@@ -70,17 +71,15 @@ export function SettingsTab({
             onChange={(event) => setDeleteText(event.target.value)}
           />
         </label>
-        <label className="eula-check">
-          <input
-            type="checkbox"
-            checked={permanent}
-            onChange={(event) => setPermanent(event.target.checked)}
-          />
-          <span>
-            Permanently remove world, add-ons, backups, and secrets instead of
-            archiving them.
-          </span>
-        </label>
+        <Checkbox
+          className="eula-check"
+          controlFirst
+          checked={permanent}
+          onChange={setPermanent}
+        >
+          Permanently remove world, add-ons, backups, and secrets instead of
+          archiving them.
+        </Checkbox>
         <button
           className="button danger"
           disabled={deleteText !== server.config.name || deleting}

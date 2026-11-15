@@ -8,6 +8,7 @@ import {
   type ServerConfig,
 } from "@mineserver/shared";
 import { Combobox, Select } from "./ChoiceControls";
+import { Checkbox, NumberField, Switch } from "./FormControls";
 import { ErrorBanner } from "./Layout";
 
 export const defaultServerConfig: ServerConfig = ServerConfigSchema.parse({
@@ -38,7 +39,7 @@ function parseRecord(value: string): Record<string, string> {
   return output;
 }
 
-type NumberField =
+type NumberKey =
   | "port"
   | "viewDistance"
   | "simulationDistance"
@@ -116,7 +117,7 @@ export function ServerForm({
   );
   // Number inputs keep their raw text while editing so a field can be emptied
   // and retyped; the text is parsed on submit.
-  const [numbers, setNumbers] = useState<Record<NumberField, string>>({
+  const [numbers, setNumbers] = useState<Record<NumberKey, string>>({
     port: String(initial.port),
     viewDistance: String(initial.viewDistance),
     simulationDistance: String(initial.simulationDistance),
@@ -127,8 +128,9 @@ export function ServerForm({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [eulaError, setEulaError] = useState(false);
 
-  function setNumber(key: NumberField, text: string) {
+  function setNumber(key: NumberKey, text: string) {
     setNumbers((current) => ({ ...current, [key]: text }));
   }
 
@@ -138,6 +140,11 @@ export function ServerForm({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    // The EULA checkbox is a custom control, so enforce what `required` did.
+    if (requireEula && !acceptEula) {
+      setEulaError(true);
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -232,12 +239,11 @@ export function ServerForm({
           </label>
           <label>
             Host port
-            <input
-              type="number"
+            <NumberField
               min={1024}
               max={65535}
               value={numbers.port}
-              onChange={(event) => setNumber("port", event.target.value)}
+              onChange={(text) => setNumber("port", text)}
             />
           </label>
           <label>
@@ -287,36 +293,29 @@ export function ServerForm({
           </label>
           <label>
             View distance
-            <input
-              type="number"
+            <NumberField
               min={2}
               max={64}
               value={numbers.viewDistance}
-              onChange={(event) =>
-                setNumber("viewDistance", event.target.value)
-              }
+              onChange={(text) => setNumber("viewDistance", text)}
             />
           </label>
           <label>
             Simulation distance
-            <input
-              type="number"
+            <NumberField
               min={2}
               max={64}
               value={numbers.simulationDistance}
-              onChange={(event) =>
-                setNumber("simulationDistance", event.target.value)
-              }
+              onChange={(text) => setNumber("simulationDistance", text)}
             />
           </label>
           <label>
             Maximum players
-            <input
-              type="number"
+            <NumberField
               min={1}
               max={1000}
               value={numbers.maxPlayers}
-              onChange={(event) => setNumber("maxPlayers", event.target.value)}
+              onChange={(text) => setNumber("maxPlayers", text)}
             />
           </label>
         </div>
@@ -331,28 +330,23 @@ export function ServerForm({
           </p>
         </div>
         <div className="form-grid">
-          <label className="toggle-row span-2">
-            <span>Sleep when nobody is playing and wake on join</span>
-            <input
-              type="checkbox"
-              checked={value.autoSleep.enabled}
-              onChange={(event) =>
-                set("autoSleep", {
-                  ...value.autoSleep,
-                  enabled: event.target.checked,
-                })
-              }
-            />
-          </label>
+          <Switch
+            className="toggle-row span-2"
+            checked={value.autoSleep.enabled}
+            onChange={(enabled) =>
+              set("autoSleep", { ...value.autoSleep, enabled })
+            }
+          >
+            Sleep when nobody is playing and wake on join
+          </Switch>
           <label>
             Empty server timeout (minutes)
-            <input
-              type="number"
+            <NumberField
               min={1}
               max={7 * 24 * 60}
               disabled={!value.autoSleep.enabled}
               value={numbers.idleMinutes}
-              onChange={(event) => setNumber("idleMinutes", event.target.value)}
+              onChange={(text) => setNumber("idleMinutes", text)}
             />
             <small>
               The first join wakes the server. Startup can take up to a minute.
@@ -413,19 +407,16 @@ export function ServerForm({
               ["onlineMode", "Online authentication", value.onlineMode],
               ["allowFlight", "Allow flight", value.allowFlight],
             ].map(([key, label, checked]) => (
-              <label className="toggle-row" key={String(key)}>
-                <span>{String(label)}</span>
-                <input
-                  type="checkbox"
-                  checked={Boolean(checked)}
-                  onChange={(event) =>
-                    set(
-                      key as keyof ServerConfig,
-                      event.target.checked as never,
-                    )
-                  }
-                />
-              </label>
+              <Switch
+                className="toggle-row"
+                key={String(key)}
+                checked={Boolean(checked)}
+                onChange={(next) =>
+                  set(key as keyof ServerConfig, next as never)
+                }
+              >
+                {String(label)}
+              </Switch>
             ))}
           </div>
         </div>
@@ -437,19 +428,15 @@ export function ServerForm({
           <p>Consistent local archives coordinated through RCON.</p>
         </div>
         <div className="form-grid">
-          <label className="toggle-row span-2">
-            <span>Enable scheduled backups</span>
-            <input
-              type="checkbox"
-              checked={value.backups.enabled}
-              onChange={(event) =>
-                set("backups", {
-                  ...value.backups,
-                  enabled: event.target.checked,
-                })
-              }
-            />
-          </label>
+          <Switch
+            className="toggle-row span-2"
+            checked={value.backups.enabled}
+            onChange={(enabled) =>
+              set("backups", { ...value.backups, enabled })
+            }
+          >
+            Enable scheduled backups
+          </Switch>
           <label>
             Cron schedule
             <input
@@ -462,20 +449,18 @@ export function ServerForm({
           </label>
           <label>
             Retain days
-            <input
-              type="number"
+            <NumberField
               min={1}
               value={numbers.retainDays}
-              onChange={(event) => setNumber("retainDays", event.target.value)}
+              onChange={(text) => setNumber("retainDays", text)}
             />
           </label>
           <label>
             Retain count
-            <input
-              type="number"
+            <NumberField
               min={1}
               value={numbers.retainCount}
-              onChange={(event) => setNumber("retainCount", event.target.value)}
+              onChange={(text) => setNumber("retainCount", text)}
             />
           </label>
         </div>
@@ -520,13 +505,18 @@ export function ServerForm({
       </section>
 
       {requireEula && (
-        <label className="eula-check">
-          <input
-            type="checkbox"
+        <div className="eula-block">
+          <Checkbox
+            className="eula-check"
+            controlFirst
+            required
+            invalid={eulaError}
             checked={acceptEula}
-            onChange={(event) => setAcceptEula(event.target.checked)}
-          />
-          <span>
+            onChange={(next) => {
+              setAcceptEula(next);
+              if (next) setEulaError(false);
+            }}
+          >
             I accept the{" "}
             <a
               href="https://aka.ms/MinecraftEULA"
@@ -536,14 +526,16 @@ export function ServerForm({
               Minecraft End User License Agreement
             </a>
             .
-          </span>
-        </label>
+          </Checkbox>
+          {eulaError && (
+            <p className="field-error" role="alert">
+              Accept the Minecraft EULA to continue.
+            </p>
+          )}
+        </div>
       )}
       <div className="form-footer">
-        <button
-          className="button primary"
-          disabled={saving || (requireEula && !acceptEula)}
-        >
+        <button className="button primary" disabled={saving}>
           {saving ? (
             <LoaderCircle className="spin" size={17} />
           ) : (

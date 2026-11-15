@@ -11,6 +11,7 @@ import {
   type ServerSummary,
 } from "@mineserver/shared";
 import { api, formatBytes, jsonBody } from "../../api";
+import { Checkbox } from "../../components/FormControls";
 import { ErrorBanner } from "../../components/Layout";
 import {
   describeVersionChannel,
@@ -371,17 +372,15 @@ export function InstallDialog({
           {required.length > 0 && !onRequestSelection && (
             <>
               <h3 className="install-dialog-subhead">Required dependencies</h3>
-              <label className="install-dependency-toggle">
-                <input
-                  type="checkbox"
-                  checked={withDependencies}
-                  onChange={(event) =>
-                    setWithDependencies(event.target.checked)
-                  }
-                />
+              <Checkbox
+                className="install-dependency-toggle"
+                controlFirst
+                checked={withDependencies}
+                onChange={setWithDependencies}
+              >
                 Also install {required.length} required{" "}
                 {required.length === 1 ? "dependency" : "dependencies"}
-              </label>
+              </Checkbox>
               <ul className="file-list">
                 {required.map((entry, index) => (
                   <li

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { Operation, ServerStats, ServerSummary } from "@mineserver/shared";
 import { api } from "../../api";
+import { Disclosure } from "../../components/FormControls";
 import { ConfirmationDialog, ErrorBanner } from "../../components/Layout";
 
 export function OverviewTab({
@@ -272,10 +273,12 @@ export function OverviewTab({
                     : operation.message || operation.status}
                 </small>
                 {operation.status === "failed" && operation.message && (
-                  <details className="operation-error">
-                    <summary>View error log</summary>
+                  <Disclosure
+                    className="operation-error"
+                    summary="View error log"
+                  >
                     <pre>{operation.message}</pre>
-                  </details>
+                  </Disclosure>
                 )}
               </div>
               <time>{new Date(operation.updatedAt).toLocaleString()}</time>

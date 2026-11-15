@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import type { BackupFile, ServerSummary } from "@mineserver/shared";
 import { api, formatBytes, isDemo } from "../../api";
-import { ErrorBanner } from "../../components/Layout";
+import { ConfirmationDialog, ErrorBanner } from "../../components/Layout";
 
 export function BackupsTab({
   server,
@@ -24,6 +24,10 @@ export function BackupsTab({
   // Only a load failure is cleared by a later successful poll; errors from
   // user actions stay until the next action.
   const [loadError, setLoadError] = useState("");
+  const [pending, setPending] = useState<{
+    kind: "restore" | "delete";
+    file: BackupFile;
+  } | null>(null);
   const load = useCallback(async () => {
     try {
       setFiles(await api<BackupFile[]>(`/api/servers/${server.id}/backups`));
@@ -55,17 +59,15 @@ export function BackupsTab({
     }
   }
 
-  async function restore(file: BackupFile) {
+  function requestRestore(file: BackupFile) {
     if (server.state !== "stopped") {
       setError("Stop the server before restoring a backup.");
       return;
     }
-    if (
-      !confirm(
-        `Restore ${file.name}? A safety snapshot is created first, then the server is started and checked.`,
-      )
-    )
-      return;
+    setPending({ kind: "restore", file });
+  }
+
+  async function restore(file: BackupFile) {
     setBusy(file.name);
     setError("");
     try {
@@ -86,7 +88,6 @@ export function BackupsTab({
   }
 
   async function remove(file: BackupFile) {
-    if (!confirm(`Permanently delete ${file.name}?`)) return;
     try {
       await api(
         `/api/servers/${server.id}/backups/${encodeURIComponent(file.name)}`,
@@ -104,6 +105,29 @@ export function BackupsTab({
 
   return (
     <div className="tab-stack">
+      <ConfirmationDialog
+        open={pending !== null}
+        title={
+          pending?.kind === "restore" ? "Restore backup?" : "Delete backup?"
+        }
+        body={
+          !pending
+            ? ""
+            : pending.kind === "restore"
+              ? `Restore ${pending.file.name}? A safety snapshot is created first, then the server is started and checked.`
+              : `Permanently delete ${pending.file.name}?`
+        }
+        confirmLabel={pending?.kind === "restore" ? "Restore" : "Delete"}
+        onCancel={() => setPending(null)}
+        onConfirm={() => {
+          const current = pending;
+          setPending(null);
+          if (!current) return;
+          void (current.kind === "restore"
+            ? restore(current.file)
+            : remove(current.file));
+        }}
+      />
       {error && <ErrorBanner message={error} />}
       {loadError && !error && <ErrorBanner message={loadError} />}
       <div className="panel action-bar">
@@ -167,7 +191,7 @@ export function BackupsTab({
                   className="icon-button"
                   title="Restore"
                   disabled={!!busy || server.state !== "stopped"}
-                  onClick={() => void restore(file)}
+                  onClick={() => requestRestore(file)}
                 >
                   {busy === file.name ? (
                     <LoaderCircle className="spin" size={17} />
@@ -178,7 +202,7 @@ export function BackupsTab({
                 <button
                   className="icon-button danger-icon"
                   title="Delete"
-                  onClick={() => void remove(file)}
+                  onClick={() => setPending({ kind: "delete", file })}
                 >
                   <Trash2 size={17} />
                 </button>

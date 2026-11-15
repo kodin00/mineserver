@@ -23,6 +23,7 @@ import {
 import { useAuth } from "../../auth";
 import { ApiError, api, jsonBody } from "../../api";
 import { Select, type ChoiceOption } from "../../components/ChoiceControls";
+import { Disclosure } from "../../components/FormControls";
 import { EmptyState, ErrorBanner } from "../../components/Layout";
 import {
   buildSearchQuery,
@@ -344,10 +345,9 @@ export function BrowseTab({
         </p>
       )}
       {operation?.status === "failed" && operation.message && (
-        <details className="operation-error">
-          <summary>View error log</summary>
+        <Disclosure className="operation-error" summary="View error log">
           <pre>{operation.message}</pre>
-        </details>
+        </Disclosure>
       )}
 
       <section className="panel">
@@ -434,8 +434,7 @@ export function BrowseTab({
       </section>
 
       {tags && tags.categories.length > 0 && (
-        <details className="panel browse-filters">
-          <summary>Categories</summary>
+        <Disclosure className="panel browse-filters" summary="Categories">
           <div className="browse-chip-row">
             {tags.categories.slice(0, 40).map((category) => {
               const active = categories.includes(category);
@@ -458,7 +457,7 @@ export function BrowseTab({
               );
             })}
           </div>
-        </details>
+        </Disclosure>
       )}
 
       {hits.length === 0 && !loading && !error && !rateLimited ? (

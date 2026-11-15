@@ -885,10 +885,8 @@ textarea {
   color: #ffaaa6;
   font-size: 10px;
 }
-.operation-error summary {
+.operation-error .disclosure-toggle {
   width: fit-content;
-  cursor: pointer;
-  font-weight: 700;
 }
 .operation-error pre {
   max-height: 220px;
@@ -1054,6 +1052,9 @@ textarea {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 17px;
 }
+.form-grid > label {
+  align-content: start;
+}
 .span-2 {
   grid-column: span 2;
 }
@@ -1077,11 +1078,169 @@ label small {
   min-height: 43px;
   padding: 0 12px;
 }
-.toggle-row input,
-.eula-check input {
-  width: 17px;
-  height: 17px;
-  accent-color: var(--green);
+.toggle-label {
+  cursor: pointer;
+}
+.toggle-label.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.toggle-label a {
+  position: relative;
+}
+.toggle-text {
+  min-width: 0;
+}
+.checkbox-control,
+.switch-control {
+  flex: none;
+  padding: 0;
+  border: 1px solid #3a5140;
+  background: #0d1510;
+  color: #07110a;
+  cursor: pointer;
+  transition: 140ms ease;
+}
+.checkbox-control {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 5px;
+  display: inline-grid;
+  place-items: center;
+}
+.checkbox-control svg {
+  opacity: 0;
+  transform: scale(0.6);
+  transition: 140ms ease;
+}
+.checkbox-control[aria-checked="true"] {
+  background: var(--green);
+  border-color: var(--green);
+}
+.checkbox-control[aria-checked="true"] svg {
+  opacity: 1;
+  transform: none;
+}
+.switch-control {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+}
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #718076;
+  transition: 160ms ease;
+}
+.switch-control[aria-checked="true"] {
+  background: var(--green-dark);
+  border-color: var(--green);
+}
+.switch-control[aria-checked="true"] .switch-thumb {
+  transform: translateX(16px);
+  background: var(--green);
+}
+.checkbox-control:hover:not(:disabled),
+.switch-control:hover:not(:disabled) {
+  border-color: var(--green);
+}
+.checkbox-control:focus-visible,
+.switch-control:focus-visible {
+  outline: 2px solid var(--green-bright);
+  outline-offset: 2px;
+}
+.checkbox-control:disabled,
+.switch-control:disabled {
+  cursor: not-allowed;
+}
+.checkbox-control[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.field-error {
+  margin: 6px 0 0 27px;
+  color: var(--danger);
+  font-size: 12px;
+}
+.number-field {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  background: #0d1510;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  transition: 140ms ease;
+}
+.number-field:focus-within {
+  border-color: #4d7655;
+  box-shadow: 0 0 0 3px rgba(100, 203, 117, 0.08);
+}
+.number-field.disabled {
+  opacity: 0.45;
+}
+.number-field input,
+.number-field input:focus {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.number-step {
+  flex: none;
+  width: 34px;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: 140ms ease;
+}
+.number-step:last-child {
+  border-radius: 0 8px 8px 0;
+}
+.number-step:hover:not(:disabled) {
+  color: var(--green-bright);
+  background: var(--surface-2);
+}
+.number-step:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.disclosure-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.disclosure-toggle svg {
+  flex: none;
+  transition: transform 160ms ease;
+}
+.disclosure.open > .disclosure-toggle svg {
+  transform: rotate(90deg);
+}
+.disclosure-toggle:focus-visible {
+  outline: 2px solid var(--green-bright);
+  outline-offset: 2px;
+}
+.disclosure-panel[hidden] {
+  display: none;
 }
 .advanced-section {
   display: block;
@@ -1868,12 +2027,12 @@ label small {
   background: var(--green-dark);
   color: var(--text);
 }
-.browse-filters summary {
-  cursor: pointer;
+.browse-filters .disclosure-toggle {
   font-size: 12px;
+  font-weight: 400;
   color: var(--muted);
 }
-.browse-filters summary:hover {
+.browse-filters .disclosure-toggle:hover {
   color: var(--text);
 }
 .browse-chip-row {
@@ -2098,11 +2257,6 @@ label small {
   gap: 10px;
   font-size: 12px;
   color: var(--muted);
-}
-.settings-toggle input {
-  margin-top: 2px;
-  flex: 0 0 auto;
-  width: auto;
 }
 .settings-summary {
   display: flex;
