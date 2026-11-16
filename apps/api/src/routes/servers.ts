@@ -22,6 +22,7 @@ import {
 } from "../helpers.js";
 import {
   listOnlinePlayers,
+  savedPlayerLists,
   runPlayerAction,
   runWhitelistAction,
 } from "../players.js";
@@ -200,6 +201,14 @@ export async function serversRoutes(
         row.id,
         instancePaths(config.instancesRoot, row.id),
       );
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/servers/:id/players/lists",
+    async (request) => {
+      const row = requireServer(store, request.params.id);
+      return savedPlayerLists(instancePaths(config.instancesRoot, row.id).data);
     },
   );
 

@@ -5,6 +5,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   rm,
   stat,
   symlink,
@@ -12,7 +13,10 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ServerConfigSchema } from "@mineserver/shared";
+import {
+  ServerConfigSchema,
+  type ModrinthVersionSummary,
+} from "@mineserver/shared";
 import { hash } from "@node-rs/argon2";
 import { listAddons } from "./addons.js";
 import { buildApp } from "./app.js";
@@ -79,6 +83,40 @@ async function fixture(
   const app = (await buildApp({ store, docker, jobs, modrinth })).app;
   return { app, store, jobs, serverId, sessionToken, csrfToken };
 }
+
+describe("saved player lists", () => {
+  it("returns whitelist and bans from disk even while the server is stopped", async () => {
+    const { app, serverId, sessionToken } = await fixture();
+    const data = instancePaths(config.instancesRoot, serverId).data;
+    await mkdir(data, { recursive: true });
+    await writeFile(
+      path.join(data, "whitelist.json"),
+      JSON.stringify([{ uuid: "alex-id", name: "Alex" }]),
+    );
+    await writeFile(
+      path.join(data, "banned-players.json"),
+      JSON.stringify([
+        {
+          uuid: "steve-id",
+          name: "Steve",
+          reason: "Griefing",
+          expires: "forever",
+        },
+      ]),
+    );
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/servers/${serverId}/players/lists`,
+      headers: { cookie: `ms_session=${sessionToken}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      whitelist: [{ name: "Alex" }],
+      banned: [{ name: "Steve", reason: "Griefing", expires: "forever" }],
+    });
+    await app.close();
+  });
+});
 
 describe("server lifecycle actions", () => {
   it("runs an existing container without applying changes and rebuilds only on confirmation action", async () => {
@@ -727,9 +765,9 @@ describe("multiple add-on uploads", () => {
       "alpha.jar already exists",
     );
     expect(
-      (
-        await listAddons(instancePaths(config.instancesRoot, serverId).addons)
-      ).map((file) => file.name),
+      (await listAddons(instancePaths(config.instancesRoot, serverId).addons))
+        .map((file) => file.name)
+        .sort(),
     ).toEqual(["alpha.jar", "beta.jar", "example-mod.jar"]);
     expect(store.getServer(serverId)?.revision).toBe(2);
 
@@ -842,6 +880,363 @@ describe("modrinth marketplace", () => {
     } as unknown as ModrinthApi;
     return { api, searchCalls };
   }
+
+  function dependencyVersion(
+    id: string,
+    required: string[] = [],
+  ): ModrinthVersionSummary {
+    const base = versionFixture();
+    return {
+      ...base,
+      id,
+      projectId: id,
+      name: id,
+      files: [{ ...base.files[0]!, filename: `${id}.jar` }],
+      dependencies: required.map((versionId) => ({
+        projectId: versionId,
+        versionId,
+        title: versionId,
+        dependencyType: "required" as const,
+      })),
+    };
+  }
+
+  it("automatically installs transitive requirements, deduplicates a cycle, and ignores optional dependencies", async () => {
+    const root = dependencyVersion("ROOT0001", ["DEPA0001", "DEPB0001"]);
+    root.dependencies.push({
+      projectId: "OPTIONAL",
+      versionId: "OPTIONAL",
+      title: "Optional",
+      dependencyType: "optional",
+    });
+    const versions: Record<string, ModrinthVersionSummary> = {
+      ROOT0001: root,
+      DEPA0001: dependencyVersion("DEPA0001", ["SHARED01"]),
+      DEPB0001: dependencyVersion("DEPB0001", ["SHARED01"]),
+      SHARED01: dependencyVersion("SHARED01", ["ROOT0001"]),
+    };
+    const { api } = fakeModrinth({ getVersion: async (id) => versions[id]! });
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture(
+      undefined,
+      api,
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/modrinth/install`,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "x-csrf-token": csrfToken,
+      },
+      payload: { versionId: "ROOT0001", projectType: "mod" },
+    });
+    expect(response.statusCode).toBe(202);
+    await expect
+      .poll(
+        () =>
+          store
+            .listOperations(serverId)
+            .find((op) => op.id === response.json().id)?.status,
+      )
+      .toBe("succeeded");
+    expect(
+      store
+        .listAddonSources(serverId)
+        .map((source) => source.project_id)
+        .sort(),
+    ).toEqual(Object.keys(versions).sort());
+    await app.close();
+  });
+
+  it("downloads selected mods concurrently and installs their shared dependency only once", async () => {
+    const versions: Record<string, ModrinthVersionSummary> = {
+      ROOT0001: dependencyVersion("ROOT0001", ["SHARED01"]),
+      ROOT0002: dependencyVersion("ROOT0002", ["SHARED01"]),
+      SHARED01: dependencyVersion("SHARED01"),
+    };
+    const { api } = fakeModrinth({ getVersion: async (id) => versions[id]! });
+    let active = 0,
+      maximum = 0;
+    const download = api.downloadFile;
+    api.downloadFile = async (expected, temp) => {
+      active++;
+      maximum = Math.max(maximum, active);
+      await download(expected, temp);
+      active--;
+    };
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture(
+      undefined,
+      api,
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/modrinth/install-batch`,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "x-csrf-token": csrfToken,
+      },
+      payload: {
+        items: [
+          { versionId: "ROOT0001", projectType: "mod" },
+          { versionId: "ROOT0002", projectType: "mod" },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(202);
+    await expect
+      .poll(
+        () =>
+          store
+            .listOperations(serverId)
+            .find((op) => op.id === response.json().id)?.status,
+      )
+      .toBe("succeeded");
+    expect(store.listAddonSources(serverId)).toHaveLength(3);
+    expect(maximum).toBeGreaterThan(1);
+    expect(store.getServer(serverId)?.revision).toBe(2);
+    await app.close();
+  });
+
+  it("rolls back the entire selection when a selected filename collides", async () => {
+    const versions: Record<string, ModrinthVersionSummary> = {
+      ROOT0001: dependencyVersion("ROOT0001"),
+      ROOT0002: dependencyVersion("ROOT0002"),
+    };
+    versions.ROOT0002!.files[0]!.filename = "example-mod.jar";
+    const { api } = fakeModrinth({ getVersion: async (id) => versions[id]! });
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture(
+      undefined,
+      api,
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/modrinth/install-batch`,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "x-csrf-token": csrfToken,
+      },
+      payload: {
+        items: [
+          { versionId: "ROOT0001", projectType: "mod" },
+          { versionId: "ROOT0002", projectType: "mod" },
+        ],
+      },
+    });
+    // A preexisting primary must not be silently skipped as if it were a verified dependency.
+    expect(response.statusCode).toBe(202);
+    await expect
+      .poll(
+        () =>
+          store
+            .listOperations(serverId)
+            .find((op) => op.id === response.json().id)?.status,
+      )
+      .toBe("failed");
+    expect(
+      (
+        await listAddons(instancePaths(config.instancesRoot, serverId).addons)
+      ).map((file) => file.name),
+    ).toEqual(["example-mod.jar"]);
+    expect(store.listAddonSources(serverId)).toHaveLength(0);
+    await app.close();
+  });
+
+  it("rejects conflicting versions across a batch before downloading", async () => {
+    const dependency = dependencyVersion("DEP00001");
+    const other = { ...dependencyVersion("DEP00002"), projectId: "DEP00001" };
+    const root = dependencyVersion("ROOT0002");
+    root.dependencies.push({
+      projectId: "DEP00001",
+      versionId: "DEP00002",
+      title: null,
+      dependencyType: "required",
+    });
+    const versions: Record<string, ModrinthVersionSummary> = {
+      ROOT0001: dependencyVersion("ROOT0001", ["DEP00001"]),
+      ROOT0002: root,
+      DEP00001: dependency,
+      DEP00002: other,
+    };
+    const { api } = fakeModrinth({
+      getVersion: async (id) => versions[id]!,
+      downloadFile: vi.fn(),
+    });
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture(
+      undefined,
+      api,
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/modrinth/install-batch`,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "x-csrf-token": csrfToken,
+      },
+      payload: {
+        items: [
+          { versionId: "ROOT0001", projectType: "mod" },
+          { versionId: "ROOT0002", projectType: "mod" },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(202);
+    await expect
+      .poll(
+        () =>
+          store
+            .listOperations(serverId)
+            .find((op) => op.id === response.json().id)?.status,
+      )
+      .toBe("failed");
+    expect(api.downloadFile).not.toHaveBeenCalled();
+    expect(store.listAddonSources(serverId)).toHaveLength(0);
+    await app.close();
+  });
+
+  it("cleans temporary files when a dependency download fails", async () => {
+    const versions: Record<string, ModrinthVersionSummary> = {
+      ROOT0001: dependencyVersion("ROOT0001", ["DEP00001"]),
+      DEP00001: dependencyVersion("DEP00001"),
+    };
+    const { api } = fakeModrinth({ getVersion: async (id) => versions[id]! });
+    const download = api.downloadFile;
+    api.downloadFile = async (expected, temp) => {
+      if (expected.filename === "DEP00001.jar")
+        throw new Error("Download failed");
+      await download(expected, temp);
+    };
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture(
+      undefined,
+      api,
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/modrinth/install-batch`,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "x-csrf-token": csrfToken,
+      },
+      payload: { items: [{ versionId: "ROOT0001", projectType: "mod" }] },
+    });
+    await expect
+      .poll(
+        () =>
+          store
+            .listOperations(serverId)
+            .find((op) => op.id === response.json().id)?.status,
+      )
+      .toBe("failed");
+    expect(store.listAddonSources(serverId)).toHaveLength(0);
+    expect(await readdir(config.tempRoot)).toEqual([]);
+    await app.close();
+  });
+
+  it("installs new required dependencies during updates and returns downloaded project images", async () => {
+    const old = { ...dependencyVersion("OLD00001"), projectId: "PROJECT1" };
+    const next = {
+      ...dependencyVersion("NEW00001", ["DEP00001"]),
+      projectId: "PROJECT1",
+    };
+    const versions: Record<string, ModrinthVersionSummary> = {
+      OLD00001: old,
+      NEW00001: next,
+      DEP00001: dependencyVersion("DEP00001"),
+    };
+    const { api } = fakeModrinth({ getVersion: async (id) => versions[id]! });
+    const project = api.getProject;
+    api.getProject = async (id) => ({
+      ...(await project(id)),
+      iconUrl: "https://cdn.modrinth.com/project-icon.png",
+    });
+    const { app, store, serverId, sessionToken, csrfToken } = await fixture(
+      undefined,
+      api,
+    );
+    const headers = {
+      cookie: `ms_session=${sessionToken}`,
+      "x-csrf-token": csrfToken,
+    };
+    const install = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/modrinth/install`,
+      headers,
+      payload: { versionId: old.id, projectType: "mod" },
+    });
+    await expect
+      .poll(
+        () =>
+          store
+            .listOperations(serverId)
+            .find((op) => op.id === install.json().id)?.status,
+      )
+      .toBe("succeeded");
+    const update = await app.inject({
+      method: "POST",
+      url: `/api/servers/${serverId}/modrinth/update`,
+      headers,
+      payload: {
+        projectId: "PROJECT1",
+        currentVersionId: old.id,
+        versionId: next.id,
+        projectType: "mod",
+      },
+    });
+    expect(update.statusCode).toBe(202);
+    await expect
+      .poll(
+        () =>
+          store
+            .listOperations(serverId)
+            .find((op) => op.id === update.json().id)?.status,
+      )
+      .toBe("succeeded");
+    expect(store.listAddonSources(serverId)).toHaveLength(2);
+    expect(
+      (await listAddons(instancePaths(config.instancesRoot, serverId).addons))
+        .map((file) => file.name)
+        .sort(),
+    ).toEqual(["DEP00001.jar", "NEW00001.jar", "example-mod.jar"]);
+    const downloaded = await app.inject({
+      method: "GET",
+      url: `/api/servers/${serverId}/addons`,
+      headers,
+    });
+    expect(downloaded.json().files).toContainEqual(
+      expect.objectContaining({
+        name: "NEW00001.jar",
+        projectTitle: "Fabric API",
+        iconUrl: "https://cdn.modrinth.com/project-icon.png",
+        addedAt: expect.any(String),
+      }),
+    );
+    await app.close();
+  });
+
+  it("protects batch installs with CSRF and rejects empty selections", async () => {
+    const { api } = fakeModrinth();
+    const { app, serverId, sessionToken, csrfToken } = await fixture(
+      undefined,
+      api,
+    );
+    const url = `/api/servers/${serverId}/modrinth/install-batch`;
+    const noCsrf = await app.inject({
+      method: "POST",
+      url,
+      headers: { cookie: `ms_session=${sessionToken}` },
+      payload: { items: [{ versionId: "Nlt8gI9z", projectType: "mod" }] },
+    });
+    expect(noCsrf.statusCode).toBe(403);
+    const empty = await app.inject({
+      method: "POST",
+      url,
+      headers: {
+        cookie: `ms_session=${sessionToken}`,
+        "x-csrf-token": csrfToken,
+      },
+      payload: { items: [] },
+    });
+    expect(empty.statusCode).toBe(400);
+    await app.close();
+  });
 
   it("derives facets server-side and ignores a client-supplied facets param", async () => {
     const { api, searchCalls } = fakeModrinth();
@@ -1483,6 +1878,8 @@ describe("player access and mod requests", () => {
           id,
           projectId: id,
           versionNumber: "1.0",
+          loaders: ["fabric"],
+          gameVersions: ["1.21.1"],
           dependencies: [],
           files: [
             {

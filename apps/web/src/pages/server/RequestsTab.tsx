@@ -73,8 +73,7 @@ export function RequestsTab({ serverId }: { serverId: string }) {
         {requests.length === 0 && (
           <p className="muted">
             No requests yet.{" "}
-            {role === "player" &&
-              "Choose projects in Browse to make a request."}
+            {role === "player" && "Choose projects in Mods to make a request."}
           </p>
         )}
         {requests.map((request) => (

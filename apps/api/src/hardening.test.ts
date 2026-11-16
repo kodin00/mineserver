@@ -39,6 +39,8 @@ const modrinth = {
     id,
     projectId: id,
     versionNumber: "1.0",
+    loaders: ["fabric"],
+    gameVersions: ["1.21.1"],
     dependencies: [],
     files: [
       {

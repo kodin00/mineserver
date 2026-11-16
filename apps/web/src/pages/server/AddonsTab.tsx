@@ -21,14 +21,21 @@ import {
 } from "lucide-react";
 import type { AddonFile, ServerSummary } from "@mineserver/shared";
 import { api, formatBytes, jsonBody } from "../../api";
-import { Select } from "../../components/ChoiceControls";
 import {
   ConfirmationDialog,
   EmptyState,
   ErrorBanner,
 } from "../../components/Layout";
 
-export function AddonsTab({ server }: { server: ServerSummary }) {
+export function AddonsTab({
+  server,
+  refreshVersion = 0,
+  onChanged,
+}: {
+  server: ServerSummary;
+  refreshVersion?: number;
+  onChanged?: () => void;
+}) {
   const [kind, setKind] = useState<"mods" | "plugins" | null>(null);
   const [files, setFiles] = useState<AddonFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,7 +48,6 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
     expiresAt: string;
   } | null>(null);
   const [copied, setCopied] = useState(false);
-  const [sort, setSort] = useState<"alphabetical" | "newest">("alphabetical");
   const [pendingDelete, setPendingDelete] = useState<AddonFile | null>(null);
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -61,16 +67,14 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
     } finally {
       setLoading(false);
     }
-  }, [server.id]);
+  }, [server.id, refreshVersion]);
   useEffect(() => void load(), [load]);
   const sortedFiles = useMemo(
     () =>
       [...files].sort((a, b) =>
-        sort === "alphabetical"
-          ? a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
-          : b.modifiedAt.localeCompare(a.modifiedAt),
+        (b.addedAt ?? b.modifiedAt).localeCompare(a.addedAt ?? a.modifiedAt),
       ),
-    [files, sort],
+    [files],
   );
 
   async function upload(selectedFiles: File[]) {
@@ -98,6 +102,7 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
         body: form,
       });
       await load();
+      onChanged?.();
     } catch (error) {
       setError(error instanceof Error ? error.message : "Upload failed");
     } finally {
@@ -150,6 +155,7 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
         },
       );
       await load();
+      onChanged?.();
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Unable to update add-on",
@@ -168,6 +174,7 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
         },
       );
       await load();
+      onChanged?.();
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Unable to delete add-on",
@@ -232,28 +239,13 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
       {error && <ErrorBanner message={error} />}
       <div className="panel upload-panel addon-upload-panel">
         <div>
-          <h2>{kind === "plugins" ? "Plugins" : "Mods"}</h2>
+          <h3>{kind === "plugins" ? "Plugins" : "Mods"} on this server</h3>
           <p>
             Drop JARs or ZIPs here, or choose multiple files. Changes apply
             after restart.
           </p>
         </div>
         <div className="addon-actions">
-          <Select
-            value={sort}
-            options={
-              [
-                { value: "alphabetical", label: "Alphabetical" },
-                { value: "newest", label: "Date added" },
-              ] as Array<{
-                value: "alphabetical" | "newest";
-                label: string;
-              }>
-            }
-            ariaLabel="Sort add-ons"
-            className="compact-choice"
-            onChange={(next: "alphabetical" | "newest") => setSort(next)}
-          />
           {files.length > 0 && (
             <>
               <a
@@ -348,17 +340,34 @@ export function AddonsTab({ server }: { server: ServerSummary }) {
           <div className="file-list">
             {sortedFiles.map((file) => (
               <div
-                className={`file-row ${file.enabled ? "" : "disabled"}`}
+                className={`file-row downloaded-mod-row ${file.enabled ? "" : "disabled"}`}
                 key={file.name}
               >
-                <span className="file-icon">
-                  <FileArchive size={18} />
+                <span className="browse-card-icon" aria-hidden="true">
+                  {file.iconUrl ? (
+                    <img
+                      src={file.iconUrl}
+                      alt=""
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <FileArchive size={20} />
+                  )}
                 </span>
                 <div>
-                  <strong>{file.name}</strong>
+                  <strong title={file.name}>
+                    {file.projectTitle ?? file.name}
+                  </strong>
                   <small>
+                    {file.projectTitle && (
+                      <>
+                        {file.name}
+                        <br />
+                      </>
+                    )}
                     {formatBytes(file.size)} ·{" "}
-                    {new Date(file.modifiedAt).toLocaleString()}
+                    {new Date(file.addedAt ?? file.modifiedAt).toLocaleString()}
                   </small>
                 </div>
                 <span

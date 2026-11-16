@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type {
   OnlinePlayers,
+  SavedPlayerLists,
   PlayerAction,
   PlayerActionResult,
   ServerSummary,
@@ -161,6 +162,8 @@ function PlayerActionMenu({
 }
 
 export function PlayersTab({ server }: { server: ServerSummary }) {
+  const [lists, setLists] = useState<SavedPlayerLists | null>(null);
+  const [listsError, setListsError] = useState("");
   const [players, setPlayers] = useState<OnlinePlayers | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -173,6 +176,36 @@ export function PlayersTab({ server }: { server: ServerSummary }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const available = server.state === "running";
   const latestLoad = useRef(0);
+  const latestListsLoad = useRef(0);
+
+  const loadLists = useCallback(async () => {
+    const request = ++latestListsLoad.current;
+    try {
+      const next = await api<SavedPlayerLists>(
+        `/api/servers/${server.id}/players/lists`,
+      );
+      if (request !== latestListsLoad.current) return;
+      setLists(next);
+      setListsError("");
+    } catch (error) {
+      if (request !== latestListsLoad.current) return;
+      setListsError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load saved player lists",
+      );
+    }
+  }, [server.id]);
+
+  useEffect(() => {
+    setLists(null);
+    void loadLists();
+    const timer = setInterval(() => void loadLists(), 15000);
+    return () => {
+      clearInterval(timer);
+      latestListsLoad.current++;
+    };
+  }, [loadLists]);
 
   const load = useCallback(async () => {
     // Only the newest request may paint, so a slow response cannot resurrect
@@ -221,6 +254,7 @@ export function PlayersTab({ server }: { server: ServerSummary }) {
         method: "POST",
         ...jsonBody(item.action),
       });
+      await loadLists();
       if (result.players) setPlayers(result.players);
       else if (item.kind === "player") await load();
       setNotice(result.output || `${item.title} completed.`);
@@ -383,8 +417,11 @@ export function PlayersTab({ server }: { server: ServerSummary }) {
         <div className="button-row">
           <button
             className="button ghost"
-            disabled={!available || loading || busy}
-            onClick={() => void load()}
+            disabled={loading || busy}
+            onClick={() => {
+              void load();
+              void loadLists();
+            }}
           >
             {loading ? (
               <LoaderCircle className="spin" size={16} />
@@ -416,6 +453,86 @@ export function PlayersTab({ server }: { server: ServerSummary }) {
           </button>
         </div>
       </section>
+
+      {listsError && <ErrorBanner message={listsError} />}
+      <div className="player-saved-lists">
+        <section className="panel" aria-label="Whitelisted players">
+          <div className="panel-heading">
+            <div>
+              <h2>Whitelist {lists ? `(${lists.whitelist.length})` : ""}</h2>
+              <p>Saved players allowed to join when the whitelist is on.</p>
+            </div>
+            <ShieldCheck size={20} />
+          </div>
+          <div className="player-list">
+            {!lists && (
+              <p className="muted player-list-empty">
+                {listsError
+                  ? "Whitelist could not be loaded."
+                  : "Loading whitelist…"}
+              </p>
+            )}
+            {lists?.whitelist.length === 0 && (
+              <p className="muted player-list-empty">The whitelist is empty.</p>
+            )}
+            {lists?.whitelist.map(({ name, uuid }) => (
+              <div className="player-row" key={uuid ?? name}>
+                <span className="player-avatar" aria-hidden="true">
+                  {name.slice(0, 1)}
+                </span>
+                <strong>{name}</strong>
+                <button
+                  className="button ghost"
+                  disabled={!available || busy}
+                  onClick={() => preparePlayerAction("whitelist-remove", name)}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="panel" aria-label="Banned players">
+          <div className="panel-heading">
+            <div>
+              <h2>Banned players {lists ? `(${lists.banned.length})` : ""}</h2>
+              <p>Minecraft's saved player bans.</p>
+            </div>
+            <Ban size={20} />
+          </div>
+          <div className="player-list">
+            {!lists && (
+              <p className="muted player-list-empty">
+                {listsError ? "Bans could not be loaded." : "Loading bans…"}
+              </p>
+            )}
+            {lists?.banned.length === 0 && (
+              <p className="muted player-list-empty">No players are banned.</p>
+            )}
+            {lists?.banned.map(({ name, uuid, reason, expires }) => (
+              <div className="player-row" key={uuid ?? name}>
+                <span className="player-avatar" aria-hidden="true">
+                  {name.slice(0, 1)}
+                </span>
+                <div className="banned-player-details">
+                  <strong>{name}</strong>
+                  {reason && <small className="muted">{reason}</small>}
+                  {expires && (
+                    <small className="muted">Expires: {expires}</small>
+                  )}
+                </div>
+                <button
+                  className="button ghost"
+                  disabled={!available || busy}
+                  onClick={() => preparePlayerAction("pardon", name)}
+                >
+                  Pardon
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
 
       {!available ? (
         <EmptyState

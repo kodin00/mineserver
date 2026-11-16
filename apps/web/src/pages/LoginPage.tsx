@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Box, LoaderCircle, LockKeyhole } from "lucide-react";
+import { LoaderCircle, LockKeyhole } from "lucide-react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { Select } from "../components/ChoiceControls";
@@ -35,7 +35,12 @@ export function LoginPage() {
       <form className="login-card" onSubmit={submit}>
         <div className="login-brand">
           <span className="brand-mark large">
-            <Box size={26} />
+            <img
+              src={`${import.meta.env.BASE_URL}mineserver-logo.webp`}
+              alt=""
+              width="48"
+              height="48"
+            />
           </span>
           <span>Mineserver</span>
         </div>

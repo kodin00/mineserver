@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Download,
   ExternalLink,
   Heart,
   LoaderCircle,
@@ -17,13 +18,14 @@ import {
   type ModrinthSearchResult,
   type ModrinthSortIndex,
   type ModrinthTags,
+  type ModrinthVersionSummary,
   type Operation,
   type ServerSummary,
 } from "@mineserver/shared";
 import { useAuth } from "../../auth";
 import { ApiError, api, jsonBody } from "../../api";
 import { Select, type ChoiceOption } from "../../components/ChoiceControls";
-import { Disclosure } from "../../components/FormControls";
+import { Checkbox, Disclosure } from "../../components/FormControls";
 import { EmptyState, ErrorBanner } from "../../components/Layout";
 import {
   buildSearchQuery,
@@ -31,6 +33,7 @@ import {
   hasNextPage,
   pageLabel,
   pageSize,
+  pickDefaultVersion,
 } from "../../modrinth";
 import { InstallDialog } from "./InstallDialog";
 
@@ -54,9 +57,11 @@ function errorText(error: unknown, fallback: string) {
 export function BrowseTab({
   server,
   refresh,
+  refreshVersion = 0,
 }: {
   server: ServerSummary;
   refresh?: () => void;
+  refreshVersion?: number;
 }) {
   const { role } = useAuth();
   const [requestItems, setRequestItems] = useState<
@@ -68,6 +73,8 @@ export function BrowseTab({
     }>
   >([]);
   const [requestBusy, setRequestBusy] = useState(false);
+  const [batch, setBatch] = useState<ModrinthSearchHit[]>([]);
+  const [batchBusy, setBatchBusy] = useState(false);
   const allowedTypes = useMemo(
     () => supportedMarketplaceTypes(server.config.type),
     [server.config.type],
@@ -102,9 +109,10 @@ export function BrowseTab({
   const target = marketplaceTargetFor(server.config.type, projectType);
   const canInstall = target === "addons" || target === "datapacks";
   const installBusy =
-    operation !== null &&
-    operation.status !== "succeeded" &&
-    operation.status !== "failed";
+    batchBusy ||
+    (operation !== null &&
+      operation.status !== "succeeded" &&
+      operation.status !== "failed");
 
   const loadInstalled = useCallback(async () => {
     try {
@@ -129,7 +137,7 @@ export function BrowseTab({
 
   useEffect(() => {
     if (role === "admin") void loadInstalled();
-  }, [loadInstalled, role]);
+  }, [loadInstalled, role, refreshVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -220,6 +228,46 @@ export function BrowseTab({
     refresh?.();
   }, [operation, loadInstalled, refresh]);
 
+  async function installBatch() {
+    if (!batch.length || installBusy) return;
+    setBatchBusy(true);
+    setError("");
+    try {
+      const items = await Promise.all(
+        batch.map(async (hit) => {
+          const query = new URLSearchParams({
+            serverType: server.config.type,
+            gameVersion: server.config.version,
+            projectType,
+          });
+          const response = await api<{ versions: ModrinthVersionSummary[] }>(
+            `/api/modrinth/projects/${encodeURIComponent(hit.projectId)}/versions?${query}`,
+          );
+          const version = pickDefaultVersion(response.versions);
+          if (!version)
+            throw new Error(
+              `No compatible version of ${hit.title} is available for this server.`,
+            );
+          return { versionId: version.id, projectType };
+        }),
+      );
+      const next = await api<Operation>(
+        `/api/servers/${server.id}/modrinth/install-batch`,
+        { method: "POST", ...jsonBody({ items }) },
+      );
+      setOperation(next);
+      setBatch([]);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Unable to download selected mods",
+      );
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
   function applyFilter(change: () => void) {
     change();
     setOffset(0);
@@ -228,6 +276,7 @@ export function BrowseTab({
   function switchType(next: MarketplaceProjectType) {
     applyFilter(() => {
       setProjectType(next);
+      setBatch([]);
       setCategories([]);
     });
   }
@@ -340,7 +389,7 @@ export function BrowseTab({
         <p className="install-progress">
           <LoaderCircle className="spin" size={16} />
           {operation.status === "failed"
-            ? "Install failed."
+            ? (operation.message ?? "Install failed.")
             : (operation.message ?? "Downloading and verifying…")}
         </p>
       )}
@@ -460,6 +509,54 @@ export function BrowseTab({
         </Disclosure>
       )}
 
+      {role === "admin" && batch.length > 0 && (
+        <section className="panel batch-selection" aria-label="Selected mods">
+          <div>
+            <strong>{batch.length} selected</strong>
+            <p>
+              Compatible versions and required dependencies download together.
+            </p>
+          </div>
+          <div className="button-row">
+            <button
+              className="button ghost"
+              disabled={installBusy}
+              onClick={() => setBatch([])}
+            >
+              Clear
+            </button>
+            <button
+              className="button primary"
+              disabled={installBusy}
+              onClick={() => void installBatch()}
+            >
+              {batchBusy ? (
+                <LoaderCircle className="spin" size={16} />
+              ) : (
+                <Download size={16} />
+              )}{" "}
+              Download selected ({batch.length})
+            </button>
+          </div>
+          <div className="batch-titles">
+            {batch.map((hit) => (
+              <button
+                className="browse-chip"
+                key={hit.projectId}
+                disabled={installBusy}
+                aria-label={`Remove ${hit.title} from selection`}
+                onClick={() =>
+                  setBatch((items) =>
+                    items.filter((item) => item.projectId !== hit.projectId),
+                  )
+                }
+              >
+                {hit.title} ×
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       {hits.length === 0 && !loading && !error && !rateLimited ? (
         <div className="compact-empty">
           <PackageOpen size={26} />
@@ -479,7 +576,7 @@ export function BrowseTab({
           </button>
         </div>
       ) : (
-        <div className="browse-grid" aria-busy={loading}>
+        <div className="browse-list" aria-busy={loading}>
           {hits.map((hit) => {
             const local = inventory.find(
               (item) =>
@@ -487,7 +584,35 @@ export function BrowseTab({
                 item.projectType === projectType,
             );
             return (
-              <article className="browse-card" key={hit.projectId}>
+              <article
+                className={`browse-card mod-tile${batch.some((item) => item.projectId === hit.projectId) ? " selected" : ""}`}
+                key={hit.projectId}
+              >
+                {role === "admin" && canInstall && !local && (
+                  <Checkbox
+                    className="mod-select"
+                    controlFirst
+                    checked={batch.some(
+                      (item) => item.projectId === hit.projectId,
+                    )}
+                    disabled={
+                      installBusy ||
+                      (batch.length >= 20 &&
+                        !batch.some((item) => item.projectId === hit.projectId))
+                    }
+                    onChange={(checked) =>
+                      setBatch((items) =>
+                        checked
+                          ? [...items, hit]
+                          : items.filter(
+                              (item) => item.projectId !== hit.projectId,
+                            ),
+                      )
+                    }
+                  >
+                    <span className="sr-only">Select {hit.title}</span>
+                  </Checkbox>
+                )}
                 <div className="browse-card-head">
                   <span className="browse-card-icon" aria-hidden="true">
                     {hit.iconUrl ? (

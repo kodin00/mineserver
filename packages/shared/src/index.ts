@@ -308,7 +308,20 @@ export interface ServerStats {
   uptime: string | null;
 }
 
+export interface SavedPlayerLists {
+  whitelist: Array<{ name: string; uuid: string | null }>;
+  banned: Array<{
+    name: string;
+    uuid: string | null;
+    reason: string | null;
+    expires: string | null;
+  }>;
+}
+
 export interface AddonFile {
+  addedAt?: string;
+  projectTitle?: string;
+  iconUrl?: string | null;
   name: string;
   size: number;
   modifiedAt: string;

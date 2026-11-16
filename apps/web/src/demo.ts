@@ -324,7 +324,10 @@ export async function demoFetch(
     url.pathname,
   );
   if (versionMatch && method === "GET") {
-    const project = projects.find((item) => item.slug === versionMatch[1]);
+    const project = projects.find(
+      (item) =>
+        item.slug === versionMatch[1] || item.projectId === versionMatch[1],
+    );
     if (!project) return error("Project not found", 404);
     return result({
       versions: [
@@ -424,6 +427,18 @@ export async function demoFetch(
   }
   if (suffix === "files/content" || suffix.startsWith("files"))
     return unavailable("Changing files");
+  if (suffix === "players/lists" && method === "GET")
+    return result({
+      whitelist: [{ name: "Alex", uuid: "demo-alex" }],
+      banned: [
+        {
+          name: "Griefer",
+          uuid: "demo-griefer",
+          reason: "Griefing",
+          expires: "forever",
+        },
+      ],
+    });
   if (suffix.startsWith("players/") || suffix.startsWith("whitelist/"))
     return unavailable("Managing players");
   if (suffix === "logs" && method === "GET")
@@ -459,6 +474,11 @@ export async function demoFetch(
           name: `${item.projectId}.jar`,
           size: 1024,
           modifiedAt: now,
+          addedAt: now,
+          projectTitle: projects.find(
+            (project) => project.projectId === item.projectId,
+          )?.title,
+          iconUrl: null,
           enabled: true,
         })),
     });
@@ -488,6 +508,59 @@ export async function demoFetch(
     return result(
       operations.filter((operation) => operation.serverId === server.id),
     );
+  if (
+    suffix === "modrinth/install-batch" &&
+    method === "POST" &&
+    role === "admin"
+  ) {
+    const items = body.items as
+      Array<{ versionId: string; projectType: string }> | undefined;
+    if (
+      !items?.length ||
+      items.length > 20 ||
+      server.config.type !== "FABRIC" ||
+      items.some(
+        (item) =>
+          item.projectType !== "mod" ||
+          !projects.some(
+            (project) => `${project.projectId}-v1` === item.versionId,
+          ),
+      )
+    )
+      return error("No matching demo projects.", 400);
+    for (const item of items) {
+      const project = projects.find(
+        (project) => `${project.projectId}-v1` === item.versionId,
+      )!;
+      if (
+        !installed.some(
+          (local) =>
+            local.serverId === server.id &&
+            local.projectId === project.projectId,
+        )
+      )
+        installed.push({
+          serverId: server.id,
+          projectId: project.projectId,
+          versionId: item.versionId,
+          projectType: "mod",
+        });
+    }
+    server.revision += 1;
+    server.restartRequired = true;
+    const timestamp = new Date().toISOString();
+    const operation: Operation = {
+      id: `install-${nextId++}`,
+      serverId: server.id,
+      kind: "marketplace-install-batch",
+      status: "succeeded",
+      message: `${items.length} projects installed in the demo.`,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    operations.unshift(operation);
+    return result(operation, 202);
+  }
   if (suffix === "modrinth/install" && method === "POST" && role === "admin") {
     const project = projects.find(
       (entry) => `${entry.projectId}-v1` === body.versionId,

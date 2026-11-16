@@ -1,3 +1,5 @@
+![Minecraft Server Manager by kodin00](docs/assets/readme-banner.webp)
+
 # Mineserver Panel
 
 Run and manage multiple Minecraft Java servers from one web panel. Create servers, view logs, run console commands, install mods or plugins, and make backups—all from your browser.
@@ -78,7 +80,11 @@ Enable **Sleep when nobody is playing and wake on join** in a server's settings.
 
 ## Mod marketplace
 
-The **Browse** tab on a server searches [Modrinth](https://modrinth.com), filtered to that server's loader and Minecraft version, and installs mods, plugins, and datapacks with verification. No account or API key is needed; the panel only needs outbound HTTPS to `api.modrinth.com` and `cdn.modrinth.com`. Everything optional (enable/disable, contact details, private-project token) is configured in the panel under **Settings**, not in `.env`. A server restart is required after installing files; datapacks also need `/reload` or a restart.
+The **Mods** tab on a server searches [Modrinth](https://modrinth.com), filtered to that server's loader and Minecraft version, and installs mods, plugins, and datapacks with verification. No account or API key is needed; the panel only needs outbound HTTPS to `api.modrinth.com` and `cdn.modrinth.com`. Everything optional (enable/disable, contact details, private-project token) is configured in the panel under **Settings**, not in `.env`. A server restart is required after installing files; datapacks also need `/reload` or a restart.
+
+Downloaded mods and the Modrinth browser appear side by side on desktop, with list tiles and project images. Downloaded files are sorted by latest added. Select up to 20 projects and click **Download selected** to install them together; required dependencies are resolved recursively and shared dependencies are downloaded once. Up to four files download concurrently. The panel verifies every download before installing and rolls back the selection if installation fails. Incompatible or conflicting required versions stop the install with an explanation.
+
+The **Players** tab shows Minecraft's saved whitelist and banned players, including ban reasons and expiry. These lists remain visible while the server is stopped; changing membership requires the server and RCON to be ready.
 
 ## Admin and player access
 
@@ -86,7 +92,7 @@ Sign in as **Administrator** with your existing panel password. Open **Account s
 
 Players can view servers, copy their connection addresses, browse compatible marketplace content, and submit requests. Server settings, files, console commands, lifecycle controls, and request decisions are restricted to admins by the API.
 
-In **Browse**, players can select several mods and click **Request to admin**. The server's **Requests** tab shows the request history. Admins can approve or decline a pending request. Approval downloads and installs the selected content and required dependencies automatically; it leaves the running server alone. Check the request status for completion or installation errors. Restarting or applying changes is a separate admin action that asks for confirmation.
+In **Mods**, players can select several mods and click **Request to admin**. The server's **Requests** tab shows the request history. Admins can approve or decline a pending request. Approval downloads and installs the selected content and required dependencies automatically; it leaves the running server alone. Check the request status for completion or installation errors. Restarting or applying changes is a separate admin action that asks for confirmation.
 
 To publish a connection address, open a server's **Settings** and set **Public server address** to the hostname or IP players should use, including a port when needed (for example, `play.example.com:25566`). Players can copy it from the server overview. This is a displayed address; configure DNS, routing, and port forwarding separately. Changing only this address does not require restarting Minecraft.
 

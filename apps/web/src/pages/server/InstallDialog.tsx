@@ -11,7 +11,6 @@ import {
   type ServerSummary,
 } from "@mineserver/shared";
 import { api, formatBytes, jsonBody } from "../../api";
-import { Checkbox } from "../../components/FormControls";
 import { ErrorBanner } from "../../components/Layout";
 import {
   describeVersionChannel,
@@ -49,7 +48,7 @@ export function InstallDialog({
   const [installing, setInstalling] = useState(false);
   const [preview, setPreview] = useState<ModrinthUpdatePreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const [withDependencies, setWithDependencies] = useState(true);
+  const withDependencies = true;
   const [error, setError] = useState("");
 
   const open = project !== null;
@@ -69,7 +68,6 @@ export function InstallDialog({
       setSelected("");
       setPreview(null);
       setError("");
-      setWithDependencies(true);
       return;
     }
     // A slow response for a project the user has already navigated away from
@@ -372,15 +370,10 @@ export function InstallDialog({
           {required.length > 0 && !onRequestSelection && (
             <>
               <h3 className="install-dialog-subhead">Required dependencies</h3>
-              <Checkbox
-                className="install-dependency-toggle"
-                controlFirst
-                checked={withDependencies}
-                onChange={setWithDependencies}
-              >
-                Also install {required.length} required{" "}
-                {required.length === 1 ? "dependency" : "dependencies"}
-              </Checkbox>
+              <p className="muted">
+                Required dependencies, including their own requirements, are
+                installed automatically.
+              </p>
               <ul className="file-list">
                 {required.map((entry, index) => (
                   <li

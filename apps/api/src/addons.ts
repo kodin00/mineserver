@@ -46,10 +46,14 @@ export async function listAddons(directory: string): Promise<AddonFile[]> {
           name: entry.name.replace(/\.disabled$/i, ""),
           size: info.size,
           modifiedAt: info.mtime.toISOString(),
+          addedAt: (info.birthtimeMs > 0
+            ? info.birthtime
+            : info.mtime
+          ).toISOString(),
           enabled: !entry.name.endsWith(".disabled"),
         };
       }),
-  ).then((files) => files.sort((a, b) => a.name.localeCompare(b.name)));
+  ).then((files) => files.sort((a, b) => b.addedAt!.localeCompare(a.addedAt!)));
 }
 
 async function addonNameExists(directory: string, filename: string) {

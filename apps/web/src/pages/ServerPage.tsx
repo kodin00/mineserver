@@ -7,7 +7,6 @@ import {
   FolderTree,
   Globe2,
   LayoutDashboard,
-  PackageSearch,
   RefreshCw,
   ClipboardList,
   Copy,
@@ -24,8 +23,7 @@ import { api } from "../api";
 import { ErrorBanner, Layout, StatusDot } from "../components/Layout";
 import { OverviewTab } from "./server/OverviewTab";
 import { ConsoleTab } from "./server/ConsoleTab";
-import { AddonsTab } from "./server/AddonsTab";
-import { BrowseTab } from "./server/BrowseTab";
+import { ModsTab } from "./server/ModsTab";
 import { BackupsTab } from "./server/BackupsTab";
 import { SettingsTab } from "./server/SettingsTab";
 import { FilesTab } from "./server/FilesTab";
@@ -39,8 +37,7 @@ const tabs = [
   ["players", "Players", Users],
   ["console", "Console", SquareTerminal],
   ["docker-logs", "Docker logs", ScrollText],
-  ["addons", "Add-ons", Boxes],
-  ["browse", "Browse", PackageSearch],
+  ["mods", "Mods", Boxes],
   ["requests", "Requests", ClipboardList],
   ["files", "Files", FolderTree],
   ["world", "World", Globe2],
@@ -56,7 +53,10 @@ export function ServerPage() {
   const [pending, setPending] = useState(0);
   const { id = "" } = useParams();
   const [search, setSearch] = useSearchParams();
-  const tab = search.get("tab") ?? "overview";
+  const requestedTab = search.get("tab") ?? "overview";
+  const tab = ["addons", "browse"].includes(requestedTab)
+    ? "mods"
+    : requestedTab;
   const [server, setServer] = useState<ServerSummary | null>(null);
   const [marketplaceEnabled, setMarketplaceEnabled] = useState(true);
   const [error, setError] = useState("");
@@ -134,9 +134,9 @@ export function ServerPage() {
   }
   const visibleTabs = tabs.filter(
     ([key]) =>
-      (marketplaceEnabled || key !== "browse") &&
-      (role === "admin" || ["overview", "browse", "requests"].includes(key)) &&
-      (!demo || !["console", "addons"].includes(key)),
+      (role === "admin" || ["overview", "mods", "requests"].includes(key)) &&
+      (role === "admin" || marketplaceEnabled || key !== "mods") &&
+      (!demo || key !== "console"),
   );
   const activeTab = visibleTabs.some(([key]) => key === tab) ? tab : "overview";
 
@@ -247,9 +247,13 @@ export function ServerPage() {
       {activeTab === "players" && <PlayersTab server={server} />}
       {activeTab === "console" && <ConsoleTab server={server} />}
       {activeTab === "docker-logs" && <DockerLogsTab server={server} />}
-      {activeTab === "addons" && <AddonsTab server={server} />}
-      {activeTab === "browse" && marketplaceEnabled && (
-        <BrowseTab server={server} refresh={load} />
+      {activeTab === "mods" && (
+        <ModsTab
+          key={server.id}
+          server={server}
+          marketplaceEnabled={marketplaceEnabled}
+          refresh={load}
+        />
       )}
       {activeTab === "files" && <FilesTab server={server} />}
       {activeTab === "world" && (

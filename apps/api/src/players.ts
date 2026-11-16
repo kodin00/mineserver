@@ -1,5 +1,7 @@
+import { readServerFile } from "./files.js";
 import type {
   OnlinePlayers,
+  SavedPlayerLists,
   PlayerAction,
   PlayerActionResult,
   WhitelistAction,
@@ -155,4 +157,44 @@ export async function runWhitelistAction(
   } catch (error) {
     throw rconUnavailable(error);
   }
+}
+
+/** Read Minecraft's own lists so membership remains visible without RCON. */
+export async function savedPlayerLists(
+  data: string,
+): Promise<SavedPlayerLists> {
+  async function readList(filename: string) {
+    try {
+      const file = await readServerFile(data, filename, 4 * 1024 * 1024);
+      const entries: unknown = JSON.parse(file.content);
+      if (!Array.isArray(entries))
+        throw new Error(`Invalid ${filename}: expected a JSON array`);
+      return entries.filter(
+        (entry): entry is Record<string, unknown> =>
+          entry !== null &&
+          typeof entry === "object" &&
+          typeof entry.name === "string" &&
+          /^[A-Za-z0-9_]{1,16}$/.test(entry.name),
+      );
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode === 404) return [];
+      throw error;
+    }
+  }
+  const [whitelist, banned] = await Promise.all([
+    readList("whitelist.json"),
+    readList("banned-players.json"),
+  ]);
+  const identity = (entry: Record<string, unknown>) => ({
+    name: entry.name as string,
+    uuid: typeof entry.uuid === "string" ? entry.uuid : null,
+  });
+  return {
+    whitelist: whitelist.map(identity),
+    banned: banned.map((entry) => ({
+      ...identity(entry),
+      reason: typeof entry.reason === "string" ? entry.reason : null,
+      expires: typeof entry.expires === "string" ? entry.expires : null,
+    })),
+  };
 }

@@ -31,10 +31,27 @@ export async function addonsRoutes(
       const row = requireServer(store, request.params.id);
       const kind = addonKind(rowConfig(row).type);
       if (!kind) return { kind: null, files: [] };
+      const sources = store.listAddonSources(row.id);
       return {
         kind,
-        files: await listAddons(
-          instancePaths(config.instancesRoot, row.id).addons,
+        files: await Promise.all(
+          (
+            await listAddons(instancePaths(config.instancesRoot, row.id).addons)
+          ).map(async (file) => {
+            const source = sources.find(
+              (item) => item.target === "addons" && item.filename === file.name,
+            );
+            if (!source) return file;
+            const project = await context.modrinth
+              .getProject(source.project_id)
+              .catch(() => null);
+            return {
+              ...file,
+              addedAt: source.installed_at,
+              projectTitle: source.project_title,
+              iconUrl: project?.iconUrl ?? null,
+            };
+          }),
         ),
       };
     },

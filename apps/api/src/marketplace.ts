@@ -12,6 +12,8 @@ import {
 } from "node:fs/promises";
 import {
   marketplaceTargetFor,
+  concreteGameVersion,
+  loaderFacetsFor,
   type MarketplaceInventoryItem,
   type MarketplaceProjectType,
   type MarketplaceTarget,
@@ -124,14 +126,35 @@ async function projectTitle(
 }
 
 async function installedFilenames(
-  store: Store,
-  serverId: string,
-  paths: InstancePaths,
-): Promise<{ names: Set<string>; sources: AddonSourceRow[] }> {
-  const files = await listAddons(paths.addons).catch(() => []);
+  context: ResolveContext,
+  target: MarketplaceTarget,
+) {
+  const levelName =
+    target === "datapacks"
+      ? await resolveLevelName(context.paths.data, context.serverConfig)
+      : null;
+  const files =
+    target === "datapacks"
+      ? (await listDatapacks(context.paths.data, levelName!)).map((file) => ({
+          ...file,
+          enabled: true,
+        }))
+      : await listAddons(context.paths.addons);
   return {
     names: new Set(files.map((file) => file.name.toLowerCase())),
-    sources: store.listAddonSources(serverId),
+    disabledNames: new Set(
+      files
+        .filter((file) => !file.enabled)
+        .map((file) => file.name.toLowerCase()),
+    ),
+    directory: levelName
+      ? resolveWithin(context.paths.data, levelName, "datapacks")
+      : context.paths.addons,
+    sources: context.store
+      .listAddonSources(context.serverId)
+      .filter(
+        (source) => source.target === target && source.level_name === levelName,
+      ),
   };
 }
 
@@ -299,57 +322,14 @@ export interface ResolveContext {
   paths: InstancePaths;
 }
 
-/**
- * Resolves the chosen version plus its one-level required dependencies. Deeper
- * transitive resolution needs a real solver and is deliberately out of scope;
- * a dependency that itself has requirements is flagged instead.
- */
+/** Walk required dependencies with project/version deduplication and cycle protection. */
 export async function resolveInstall(
   context: ResolveContext,
   input: { versionId: string; projectType: MarketplaceProjectType },
-): Promise<{
-  target: MarketplaceTarget;
-  primary: ResolvedItem;
-  dependencies: ResolvedItem[];
-  optional: Array<{ projectId: string; projectTitle: string }>;
-  incompatible: Array<{
-    projectId: string;
-    projectTitle: string;
-    installed: boolean;
-  }>;
-  warnings: string[];
-}> {
-  const { modrinth, serverConfig } = context;
-  const target = assertInstallable(serverConfig, input.projectType);
+) {
+  const target = assertInstallable(context.serverConfig, input.projectType);
   const extension = expectedExtension(target);
-  const version = await modrinth.getVersion(input.versionId);
-  const file = primaryFile(version);
-  const warnings: string[] = [];
-
-  if (!file.filename.toLowerCase().endsWith(extension)) {
-    throw httpError(
-      target === "datapacks"
-        ? `That version ships ${file.filename}, which is not a datapack ZIP.`
-        : `That version ships ${file.filename}, which is not a JAR.`,
-      400,
-    );
-  }
-
-  const installed = await installedFilenames(
-    context.store,
-    context.serverId,
-    context.paths,
-  );
-
-  const primary: ResolvedItem = {
-    version,
-    file,
-    projectTitle: await projectTitle(modrinth, version.projectId),
-    exactMatch: true,
-    alreadyInstalled: installed.names.has(file.filename.toLowerCase()),
-    hasNestedDependencies: false,
-  };
-
+  const installed = await installedFilenames(context, target);
   const dependencies: ResolvedItem[] = [];
   const optional: Array<{ projectId: string; projectTitle: string }> = [];
   const incompatible: Array<{
@@ -357,130 +337,178 @@ export async function resolveInstall(
     projectTitle: string;
     installed: boolean;
   }> = [];
-  const seen = new Set<string>([version.projectId]);
+  const seen = new Map<string, ResolvedItem>();
+  const warnings: string[] = [];
 
-  for (const dependency of version.dependencies) {
-    // Embedded dependencies are already inside the jar.
-    if (dependency.dependencyType === "embedded") continue;
-    if (!dependency.projectId && !dependency.versionId) continue;
-
-    if (dependency.dependencyType === "optional") {
-      if (dependency.projectId && !seen.has(dependency.projectId)) {
-        seen.add(dependency.projectId);
-        optional.push({
-          projectId: dependency.projectId,
-          projectTitle: await projectTitle(modrinth, dependency.projectId),
-        });
-      }
-      continue;
-    }
-
-    if (dependency.dependencyType === "incompatible") {
-      if (dependency.projectId) {
-        const sources = installed.sources.filter(
-          (source) => source.project_id === dependency.projectId,
-        );
-        incompatible.push({
-          projectId: dependency.projectId,
-          projectTitle: await projectTitle(modrinth, dependency.projectId),
-          installed: sources.length > 0,
-        });
-      }
-      continue;
-    }
-
-    const resolved = await resolveDependency(
-      context,
-      dependency,
-      input.projectType,
-      extension,
-      installed,
-      warnings,
-    );
-    if (!resolved) continue;
-    if (seen.has(resolved.version.projectId)) continue;
-    seen.add(resolved.version.projectId);
-    dependencies.push(resolved);
-  }
-
-  return { target, primary, dependencies, optional, incompatible, warnings };
-}
-
-async function resolveDependency(
-  context: ResolveContext,
-  dependency: { projectId: string | null; versionId: string | null },
-  projectType: MarketplaceProjectType,
-  extension: string,
-  installed: { names: Set<string>; sources: AddonSourceRow[] },
-  warnings: string[],
-): Promise<ResolvedItem | null> {
-  const { modrinth, serverConfig } = context;
-
-  // An explicit version id is authoritative.
-  if (dependency.versionId) {
-    const version = await modrinth.getVersion(dependency.versionId);
+  async function itemFor(
+    version: ModrinthVersionSummary,
+  ): Promise<ResolvedItem> {
     const file = primaryFile(version);
+    if (!file.filename.toLowerCase().endsWith(extension)) {
+      throw httpError(
+        `That version ships ${file.filename}, which is not a ${extension} file.`,
+        400,
+      );
+    }
+    const loaders = loaderFacetsFor(
+      context.serverConfig.type,
+      input.projectType,
+    );
+    const gameVersion = concreteGameVersion(context.serverConfig.version);
+    if (
+      (loaders.length &&
+        !loaders.some((loader) => version.loaders.includes(loader))) ||
+      (gameVersion && !version.gameVersions.includes(gameVersion))
+    ) {
+      throw httpError(
+        `${version.name} is not compatible with this server's loader or Minecraft version.`,
+        409,
+      );
+    }
     return {
       version,
       file,
-      projectTitle: await projectTitle(modrinth, version.projectId),
+      projectTitle: await projectTitle(context.modrinth, version.projectId),
       exactMatch: true,
       alreadyInstalled: installed.names.has(file.filename.toLowerCase()),
-      hasNestedDependencies: version.dependencies.some(
-        (entry) => entry.dependencyType === "required",
-      ),
+      hasNestedDependencies: false,
     };
   }
 
-  const projectId = dependency.projectId;
-  if (!projectId) return null;
-  const title = await projectTitle(modrinth, projectId);
-
-  const filtered = await modrinth.listVersions({
-    idOrSlug: projectId,
-    serverType: serverConfig.type,
-    gameVersion: serverConfig.version,
-    projectType,
-  });
-  let best = pickBestVersion(filtered, extension);
-  let exactMatch = true;
-
-  if (!best) {
-    // Retry without the Minecraft version constraint so a slightly stale
-    // dependency is offered with a caution rather than silently dropped.
-    const loose = await modrinth.listVersions({
-      idOrSlug: projectId,
-      serverType: serverConfig.type,
-      gameVersion: "LATEST",
-      projectType,
-    });
-    best = pickBestVersion(loose, extension);
-    exactMatch = false;
-    if (best) {
-      warnings.push(
-        `${title} has no build for this Minecraft version; ${best.versionNumber} was selected instead.`,
+  async function visit(item: ResolvedItem) {
+    const previous = seen.get(item.version.projectId);
+    if (previous) {
+      if (previous.version.id !== item.version.id)
+        throw httpError(
+          `Conflicting required versions of ${item.projectTitle}. Choose compatible mods.`,
+          409,
+        );
+      return;
+    }
+    if (seen.size >= 100)
+      throw httpError(
+        "This install has too many required dependencies (maximum 100 projects).",
+        409,
       );
+    seen.set(item.version.projectId, item);
+    for (const dependency of item.version.dependencies) {
+      if (dependency.dependencyType === "embedded") continue;
+      if (dependency.dependencyType === "required") {
+        if (!dependency.projectId && !dependency.versionId)
+          throw httpError(
+            `A required dependency of ${item.projectTitle} cannot be identified.`,
+            409,
+          );
+        const prior = dependency.projectId
+          ? seen.get(dependency.projectId)
+          : undefined;
+        if (
+          prior &&
+          (!dependency.versionId || prior.version.id === dependency.versionId)
+        )
+          continue;
+        let version: ModrinthVersionSummary | null;
+        if (dependency.versionId) {
+          version = await context.modrinth.getVersion(dependency.versionId);
+          if (
+            dependency.projectId &&
+            version.projectId !== dependency.projectId
+          )
+            throw httpError(
+              "The required dependency belongs to a different project.",
+              409,
+            );
+        } else {
+          const existing = installed.sources.find(
+            (source) => source.project_id === dependency.projectId,
+          );
+          const current = existing
+            ? await reconcileSource(context, existing)
+            : null;
+          version =
+            existing && current?.verified && current.enabled !== false
+              ? await context.modrinth.getVersion(existing.version_id)
+              : pickBestVersion(
+                  await context.modrinth.listVersions({
+                    idOrSlug: dependency.projectId!,
+                    serverType: context.serverConfig.type,
+                    gameVersion: context.serverConfig.version,
+                    projectType: input.projectType,
+                  }),
+                  extension,
+                );
+        }
+        if (!version)
+          throw httpError(
+            `Required dependency ${dependency.projectId} has no compatible version for this server.`,
+            409,
+          );
+        const child = await itemFor(version);
+        const existing = installed.sources.find(
+          (source) =>
+            source.target === target && source.project_id === version.projectId,
+        );
+        if (existing) {
+          const current = await reconcileSource(context, existing);
+          if (
+            current &&
+            (existing.version_id !== version.id ||
+              !current.verified ||
+              current.enabled === false)
+          ) {
+            throw httpError(
+              `Required dependency ${child.projectTitle} is disabled, modified, or has a different version. Update or enable it first.`,
+              409,
+            );
+          }
+        }
+        if (child.alreadyInstalled) {
+          const filename = await caseInsensitiveEntry(
+            installed.directory,
+            child.file.filename,
+          );
+          if (
+            installed.disabledNames.has(child.file.filename.toLowerCase()) ||
+            !filename ||
+            (
+              await sha512(path.join(installed.directory, filename))
+            ).toLowerCase() !== child.file.sha512.toLowerCase()
+          ) {
+            throw httpError(
+              `Required dependency ${child.projectTitle} is disabled or its file differs from the required download. Review it first.`,
+              409,
+            );
+          }
+        }
+        const known = seen.has(version.projectId);
+        await visit(child);
+        if (!known) dependencies.push(child);
+      } else if (dependency.projectId) {
+        const title = await projectTitle(
+          context.modrinth,
+          dependency.projectId,
+        );
+        if (dependency.dependencyType === "optional")
+          optional.push({
+            projectId: dependency.projectId,
+            projectTitle: title,
+          });
+        else
+          incompatible.push({
+            projectId: dependency.projectId,
+            projectTitle: title,
+            installed: installed.sources.some(
+              (source) => source.project_id === dependency.projectId,
+            ),
+          });
+      }
     }
   }
-
-  if (!best) {
-    throw httpError(
-      `Required dependency ${title} has no compatible version for this server.`,
-      409,
-    );
-  }
-
-  const file = primaryFile(best);
-  return {
-    version: best,
-    file,
-    projectTitle: title,
-    exactMatch,
-    alreadyInstalled: installed.names.has(file.filename.toLowerCase()),
-    hasNestedDependencies: best.dependencies.some(
-      (entry) => entry.dependencyType === "required",
-    ),
-  };
+  const primary = await itemFor(
+    await context.modrinth.getVersion(input.versionId),
+  );
+  await visit(primary);
+  return { target, primary, dependencies, optional, incompatible, warnings };
 }
 
 function previewEntry(item: ResolvedItem): ModrinthPreviewEntry {
@@ -561,17 +589,66 @@ export async function runInstall(
     acknowledgeLevelName?: string | undefined;
   },
 ): Promise<string> {
-  const { serverId } = context;
   const resolved = await resolveInstall(context, input);
-  const items = [resolved.primary];
-  if (input.includeRequiredDependencies) {
-    items.push(
-      ...resolved.dependencies.filter((item) => !item.alreadyInstalled),
-    );
-  }
+  const items = [
+    resolved.primary,
+    ...resolved.dependencies.filter((item) => !item.alreadyInstalled),
+  ];
+  return installResolved(context, input, resolved.target, items);
+}
 
+export async function runBatchInstall(
+  context: ResolveContext,
+  inputs: Array<{ versionId: string; projectType: MarketplaceProjectType }>,
+): Promise<string> {
+  const first = inputs[0]!;
+  const target = assertInstallable(context.serverConfig, first.projectType);
+  const items = new Map<string, ResolvedItem>();
+  const filenames = new Map<string, string>();
+  const primaryProjects = new Set<string>();
+  for (const input of inputs) {
+    if (input.projectType !== first.projectType)
+      throw httpError("Select one content type per batch.", 400);
+    const resolved = await resolveInstall(context, input);
+    primaryProjects.add(resolved.primary.version.projectId);
+    for (const item of [resolved.primary, ...resolved.dependencies]) {
+      const previous = items.get(item.version.projectId);
+      if (previous && previous.version.id !== item.version.id)
+        throw httpError(
+          `Conflicting required versions of ${item.projectTitle}. Choose compatible mods.`,
+          409,
+        );
+      const key = item.file.filename.toLowerCase();
+      if (filenames.has(key) && filenames.get(key) !== item.version.projectId)
+        throw httpError(
+          `Multiple projects use the filename ${item.file.filename}.`,
+          409,
+        );
+      items.set(item.version.projectId, item);
+      filenames.set(key, item.version.projectId);
+    }
+  }
+  const pending = [...items.values()].filter(
+    (item) =>
+      !item.alreadyInstalled || primaryProjects.has(item.version.projectId),
+  );
+  if (!pending.length) return "All selected projects are already installed.";
+  return installResolved(context, first, target, pending);
+}
+
+async function installResolved(
+  context: ResolveContext,
+  input: {
+    projectType: MarketplaceProjectType;
+    acknowledgeLevelName?: string | undefined;
+  },
+  target: MarketplaceTarget,
+  items: ResolvedItem[],
+  commit?: () => void,
+): Promise<string> {
+  const { serverId } = context;
   let levelName = "";
-  if (resolved.target === "datapacks") {
+  if (target === "datapacks") {
     levelName = await resolveLevelName(
       context.paths.data,
       context.serverConfig,
@@ -589,17 +666,28 @@ export async function runInstall(
 
   const staged: StagedDownload[] = [];
   try {
-    for (const item of items) {
-      const temp = await createTempUpload(config.tempRoot);
-      const expected: ExpectedFile = {
-        url: item.file.url,
-        filename: item.file.filename,
-        sizeBytes: item.file.size,
-        sha512: item.file.sha512,
-        sha1: item.file.sha1,
-      };
-      await context.modrinth.downloadFile(expected, temp);
-      staged.push({ item, tempPath: temp.path });
+    // Download up to four files together; settle all in-flight work before cleanup.
+    for (let offset = 0; offset < items.length; offset += 4) {
+      const results = await Promise.allSettled(
+        items.slice(offset, offset + 4).map(async (item) => {
+          const temp = await createTempUpload(config.tempRoot);
+          staged.push({ item, tempPath: temp.path });
+          const expected: ExpectedFile = {
+            url: item.file.url,
+            filename: item.file.filename,
+            sizeBytes: item.file.size,
+            sha512: item.file.sha512,
+            sha1: item.file.sha1,
+          };
+          try {
+            await context.modrinth.downloadFile(expected, temp);
+          } finally {
+            (temp.stream as import("node:stream").Writable).destroy();
+          }
+        }),
+      );
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
     }
 
     const undo: Array<() => Promise<void>> = [];
@@ -610,7 +698,7 @@ export async function runInstall(
     }> = [];
     try {
       for (const entry of staged) {
-        if (resolved.target === "datapacks") {
+        if (target === "datapacks") {
           const result = await installDatapack(
             entry.tempPath,
             entry.item.file.filename,
@@ -675,6 +763,7 @@ export async function runInstall(
           });
         }
       }
+      commit?.();
     } catch (error) {
       await Promise.all(undo.map((step) => step().catch(() => undefined)));
       for (const installed of installedSources) {
@@ -692,7 +781,7 @@ export async function runInstall(
       installedNames.length === 1
         ? `Installed ${installedNames[0]}`
         : `Installed ${installedNames.length} files: ${installedNames.join(", ")}`;
-    return resolved.target === "datapacks"
+    return target === "datapacks"
       ? `${summary} into world "${levelName}"`
       : summary;
   } finally {
@@ -784,7 +873,8 @@ export async function runUpdate(
       409,
     );
   }
-  const version = await context.modrinth.getVersion(input.versionId);
+  const resolved = await resolveInstall(context, input);
+  const version = resolved.primary.version;
   if (version.projectId !== source.project_id) {
     throw httpError("The update does not belong to the installed project", 400);
   }
@@ -851,16 +941,24 @@ export async function runUpdate(
     await rename(temp.path, destination);
     replacementInstalled = true;
     await chmod(destination, 0o644);
-    context.store.updateAddonSource(source, {
-      ...source,
-      filename: file.filename,
-      version_id: version.id,
-      version_number: version.versionNumber,
-      sha512: file.sha512,
-      installed_at: new Date().toISOString(),
-    });
-    await rm(backup, { force: true });
-    context.store.touchServerRevision(context.serverId);
+    const commit = () =>
+      context.store.updateAddonSource(source, {
+        ...source,
+        filename: file.filename,
+        version_id: version.id,
+        version_number: version.versionNumber,
+        sha512: file.sha512,
+        installed_at: new Date().toISOString(),
+      });
+    await installResolved(
+      context,
+      input,
+      target,
+      resolved.dependencies.filter((item) => !item.alreadyInstalled),
+      commit,
+    );
+    // The update is committed; a retained backup must not undo a successful install.
+    await rm(backup, { force: true }).catch(() => undefined);
     return `Updated ${source.project_title} to ${version.versionNumber}`;
   } catch (error) {
     if (replacementInstalled) await rm(destination, { force: true });
@@ -878,6 +976,7 @@ export async function runUpdate(
     if (source) context.store.recordAddonSource(source);
     throw error;
   } finally {
+    (temp.stream as import("node:stream").Writable).destroy();
     await Promise.all([
       rm(temp.path, { force: true }),
       keepBackup ? Promise.resolve() : rm(backup, { force: true }),

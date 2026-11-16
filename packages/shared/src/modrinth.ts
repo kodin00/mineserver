@@ -200,19 +200,23 @@ export const ModrinthPreviewSchema = z.object({
 export const ModrinthInstallSchema = z.object({
   versionId: versionIdSchema,
   projectType: MarketplaceProjectTypeSchema,
-  includeRequiredDependencies: z.boolean().default(false),
+  includeRequiredDependencies: z.boolean().default(true),
   // Optional guard so a client that showed the user one world name cannot
   // silently install into another.
   acknowledgeLevelName: z.string().trim().max(64).optional(),
 });
 export type ModrinthInstallInput = z.infer<typeof ModrinthInstallSchema>;
 
+export const ModrinthBatchInstallSchema = z.object({
+  items: z.array(ModrinthPreviewSchema).min(1).max(20),
+});
+
 export const ModrinthUpdateSchema = z.object({
   projectId: z.string().trim().min(1).max(64),
   currentVersionId: versionIdSchema,
   versionId: versionIdSchema,
   projectType: MarketplaceProjectTypeSchema,
-  includeRequiredDependencies: z.boolean().default(false),
+  includeRequiredDependencies: z.boolean().default(true),
   acknowledgeLevelName: z.string().trim().max(64).optional(),
 });
 export type ModrinthUpdateInput = z.infer<typeof ModrinthUpdateSchema>;

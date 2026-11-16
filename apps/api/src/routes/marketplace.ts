@@ -4,6 +4,7 @@ import { httpError } from "../utils.js";
 import {
   MarketplaceSettingsSchema,
   ModrinthInstallSchema,
+  ModrinthBatchInstallSchema,
   ModrinthPreviewSchema,
   ModrinthSearchQuerySchema,
   ModrinthUpdateSchema,
@@ -25,6 +26,7 @@ import {
   buildUpdatePreview,
   marketplaceInventory,
   runInstall,
+  runBatchInstall,
   runUpdate,
 } from "../marketplace.js";
 
@@ -407,6 +409,30 @@ export async function marketplaceRoutes(
       // shape as a backup restore.
       const operation = jobs.runExclusive(row.id, "marketplace-install", () =>
         runInstall(marketplaceContext(row), body),
+      );
+      return reply.code(202).send(operation);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/servers/:id/modrinth/install-batch",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      assertMarketplaceEnabled();
+      const row = requireServer(store, request.params.id);
+      const body = ModrinthBatchInstallSchema.parse(request.body);
+      for (const item of body.items)
+        assertInstallable(rowConfig(row), item.projectType);
+      if (
+        body.items.some(
+          (item) => item.projectType !== body.items[0]!.projectType,
+        )
+      )
+        throw httpError("Select one content type per batch.", 400);
+      const operation = jobs.runExclusive(
+        row.id,
+        "marketplace-install-batch",
+        () => runBatchInstall(marketplaceContext(row), body.items),
       );
       return reply.code(202).send(operation);
     },

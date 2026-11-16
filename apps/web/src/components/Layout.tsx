@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
-import { Box, LogOut, Settings } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 
@@ -21,7 +21,12 @@ export function Layout({
       <header className="topbar">
         <Link className="brand" to="/">
           <span className="brand-mark">
-            <Box size={20} />
+            <img
+              src={`${import.meta.env.BASE_URL}mineserver-logo.webp`}
+              alt=""
+              width="35"
+              height="35"
+            />
           </span>
           <span>Mineserver</span>
         </Link>

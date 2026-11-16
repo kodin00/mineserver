@@ -24,7 +24,7 @@ describe("marketplace update contracts", () => {
       projectId: "project-id",
       currentVersionId: "Abc12345",
       versionId: "Def67890",
-      includeRequiredDependencies: false,
+      includeRequiredDependencies: true,
     });
     expect(
       ModrinthUpdateSchema.safeParse({
