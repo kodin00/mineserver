@@ -19,6 +19,8 @@
   --green-dark: #1c4d28;
   --danger: #ff716d;
   --warning: #f1bb63;
+  /* Shared height for text inputs, dropdowns, and number fields. */
+  --control-height: 42px;
 }
 
 * {
@@ -268,7 +270,8 @@ code,
   color: var(--muted);
   font-size: 14px;
 }
-label {
+label,
+.field {
   color: #c3cec5;
   font-size: 12px;
   font-weight: 700;
@@ -294,6 +297,10 @@ textarea:focus {
   border-color: #4d7655;
   box-shadow: 0 0 0 3px rgba(100, 203, 117, 0.08);
 }
+input:not([type="file"]),
+select {
+  height: var(--control-height);
+}
 textarea {
   resize: vertical;
   font-family: "DM Mono", monospace;
@@ -306,7 +313,7 @@ textarea {
 }
 .choice-trigger {
   width: 100%;
-  min-height: 41px;
+  height: var(--control-height);
   padding: 0 11px 0 12px;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -326,14 +333,12 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.choice-trigger svg,
-.combobox-toggle svg {
+.choice-trigger svg {
   flex: none;
   color: #718076;
   transition: transform 140ms ease;
 }
-.choice-trigger[aria-expanded="true"] svg,
-.combobox-control:focus-within .combobox-toggle svg {
+.choice-trigger[aria-expanded="true"] svg {
   transform: rotate(180deg);
 }
 .choice-trigger:hover:not(:disabled) {
@@ -341,7 +346,6 @@ textarea {
   background: #101a13;
 }
 .choice-trigger:focus-visible,
-.combobox-toggle:focus-visible,
 .action-menu-item:focus-visible {
   outline: none;
   border-color: #4d7655;
@@ -405,27 +409,6 @@ textarea {
 }
 .compact-choice {
   width: 145px;
-}
-.combobox-control input {
-  padding-right: 38px;
-}
-.combobox-toggle {
-  position: absolute;
-  z-index: 1;
-  top: 1px;
-  right: 1px;
-  width: 36px;
-  height: 39px;
-  border: 0;
-  border-radius: 0 8px 8px 0;
-  color: var(--text);
-  background: transparent;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-}
-.combobox-toggle:hover {
-  background: var(--surface-3);
 }
 .action-menu {
   display: inline-flex;
@@ -1052,13 +1035,15 @@ textarea {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 17px;
 }
-.form-grid > label {
+.form-grid > label,
+.form-grid > .field {
   align-content: start;
 }
 .span-2 {
   grid-column: span 2;
 }
-label small {
+label small,
+.field small {
   color: #6f7e72;
   font-size: 10px;
   font-weight: 500;
@@ -1168,6 +1153,7 @@ label small {
   font-size: 12px;
 }
 .number-field {
+  height: var(--control-height);
   display: flex;
   align-items: stretch;
   min-width: 0;
@@ -1185,6 +1171,7 @@ label small {
 }
 .number-field input,
 .number-field input:focus {
+  height: auto;
   flex: 1;
   min-width: 0;
   background: transparent;

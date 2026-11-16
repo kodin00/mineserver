@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ChevronDown, LoaderCircle, Save } from "lucide-react";
 import {
   ServerConfigSchema,
@@ -7,7 +7,8 @@ import {
   serverTypes,
   type ServerConfig,
 } from "@mineserver/shared";
-import { Combobox, Select } from "./ChoiceControls";
+import { api } from "../api";
+import { Select } from "./ChoiceControls";
 import { Checkbox, NumberField, Switch } from "./FormControls";
 import { ErrorBanner } from "./Layout";
 
@@ -63,6 +64,35 @@ const fieldLabels: Record<string, string> = {
   publicAddress: "Public address",
 };
 
+// Sentinel dropdown value that reveals the free-text version input.
+const CUSTOM_VERSION = "__custom__";
+
+const versionPresets = [
+  { value: "LATEST", label: "Latest release" },
+  { value: "SNAPSHOT", label: "Latest snapshot" },
+];
+
+function useReleaseVersions() {
+  const [versions, setVersions] = useState<string[]>([]);
+  useEffect(() => {
+    let active = true;
+    api<{ versions: Array<{ id: string; type: string }> }>("/api/metadata")
+      .then((metadata) => {
+        if (!active) return;
+        setVersions(
+          metadata.versions
+            .filter((version) => version.type === "release")
+            .map((version) => version.id),
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+  return versions;
+}
+
 // An empty field becomes NaN so validation reports it as "not a number"
 // instead of silently turning into 0 or falling back to a schema default.
 function parseNumber(text: string): number {
@@ -94,13 +124,11 @@ export function ServerForm({
   initial,
   submitLabel,
   requireEula,
-  versionSuggestions = [],
   onSubmit,
 }: {
   initial: ServerConfig;
   submitLabel: string;
   requireEula?: boolean;
-  versionSuggestions?: string[];
   onSubmit(value: ServerConfig, acceptEula: boolean): Promise<void>;
 }) {
   const [value, setValue] = useState(initial);
@@ -129,6 +157,19 @@ export function ServerForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [eulaError, setEulaError] = useState(false);
+  const releaseVersions = useReleaseVersions();
+  // Set once the user picks "Custom version" or types in the custom field, so
+  // the text input stays open even when the typed value matches a release.
+  const [customVersionPinned, setCustomVersionPinned] = useState(false);
+  const versionOptions = [
+    ...versionPresets,
+    ...releaseVersions
+      .filter((version) => !versionPresets.some((p) => p.value === version))
+      .map((version) => ({ value: version, label: version })),
+  ];
+  const customVersion =
+    customVersionPinned ||
+    !versionOptions.some((option) => option.value === value.version);
 
   function setNumber(key: NumberKey, text: string) {
     setNumbers((current) => ({ ...current, [key]: text }));
@@ -205,27 +246,42 @@ export function ServerForm({
               onChange={(next) => set("type", next)}
             />
           </label>
-          <label>
-            Minecraft version
-            <Combobox
-              value={value.version}
+          <div className="field">
+            <span id="minecraft-version-label">Minecraft version</span>
+            <Select
+              value={customVersion ? CUSTOM_VERSION : value.version}
               options={[
-                { value: "LATEST", label: "LATEST" },
-                { value: "SNAPSHOT", label: "SNAPSHOT" },
-                ...versionSuggestions.map((version) => ({
-                  value: version,
-                  label: version,
-                })),
-              ].filter(
-                (option, index, all) =>
-                  all.findIndex((entry) => entry.value === option.value) ===
-                  index,
-              )}
+                ...versionOptions,
+                { value: CUSTOM_VERSION, label: "Custom version…" },
+              ]}
               ariaLabel="Minecraft version"
-              onChange={(next) => set("version", next)}
-              placeholder="LATEST or 1.21.5"
+              onChange={(next) => {
+                if (next === CUSTOM_VERSION) {
+                  setCustomVersionPinned(true);
+                  // Start empty instead of showing a preset keyword to edit.
+                  if (versionPresets.some((p) => p.value === value.version))
+                    set("version", "");
+                  return;
+                }
+                setCustomVersionPinned(false);
+                set("version", next);
+              }}
             />
-          </label>
+            {customVersion && (
+              <input
+                value={value.version}
+                onChange={(event) => {
+                  setCustomVersionPinned(true);
+                  set("version", event.target.value);
+                }}
+                aria-labelledby="minecraft-version-label"
+                required
+                maxLength={40}
+                placeholder="1.20.1 or 24w14a"
+              />
+            )}
+            <small>Pick a version, or choose Custom to type any version.</small>
+          </div>
           <label>
             Public server address
             <input
