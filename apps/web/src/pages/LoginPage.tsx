@@ -90,9 +90,9 @@ export function LoginPage() {
         </button>
         {!demo && role === "admin" && (
           <p className="login-default-password">
-            Default password: <code>mineserver123!</code>. To use a different
-            password, set <code>ADMIN_PASSWORD</code> in <code>.env</code>{" "}
-            before the first start.
+            Default password: <code>123456</code>. To use a different password,
+            set <code>ADMIN_PASSWORD</code> in <code>.env</code> before the
+            first start.
           </p>
         )}
         <p className="login-footnote">

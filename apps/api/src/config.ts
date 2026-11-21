@@ -1,6 +1,8 @@
 import path from "node:path";
 import { z } from "zod";
 
+export const DEFAULT_ADMIN_PASSWORD = "123456";
+
 const EnvSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
@@ -8,7 +10,7 @@ const EnvSchema = z.object({
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65535).default(3001),
   DATA_ROOT: z.string().default(path.resolve(process.cwd(), "runtime")),
-  ADMIN_PASSWORD: z.string().min(12).default("change-me-now-please"),
+  ADMIN_PASSWORD: z.string().min(6).default(DEFAULT_ADMIN_PASSWORD),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(24),
   COOKIE_SECURE: z
     .enum(["true", "false"])

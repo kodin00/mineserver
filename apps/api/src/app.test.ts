@@ -1680,6 +1680,41 @@ describe("modrinth marketplace", () => {
     await app.close();
   });
 
+  it("keeps old releases in metadata behind many snapshots", async () => {
+    const manifest = {
+      versions: [
+        ...Array.from({ length: 120 }, (_, index) => ({
+          id: `snap-${index}`,
+          type: "snapshot",
+        })),
+        { id: "1.21.1", type: "release" },
+        { id: "1.20.1", type: "release" },
+        { id: "b1.7.3", type: "old_beta" },
+      ],
+    };
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", (input: Parameters<typeof fetch>[0]) =>
+      String(input).includes("version_manifest_v2.json")
+        ? Promise.resolve(Response.json(manifest))
+        : Promise.resolve(new Response("{}", { status: 503 })),
+    );
+    const { api } = fakeModrinth();
+    const { app, sessionToken } = await fixture({} as ComposeManager, api);
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/metadata",
+      headers: { cookie: `ms_session=${sessionToken}` },
+    });
+    vi.stubGlobal("fetch", realFetch);
+    const ids = (response.json().versions as Array<{ id: string }>).map(
+      (version) => version.id,
+    );
+    expect(ids).toHaveLength(52);
+    expect(ids.slice(0, 2)).toEqual(["snap-0", "snap-1"]);
+    expect(ids.slice(-2)).toEqual(["1.21.1", "1.20.1"]);
+    await app.close();
+  });
+
   it("reports the marketplace flag through metadata", async () => {
     const { api } = fakeModrinth();
     const { app, sessionToken } = await fixture({} as ComposeManager, api);

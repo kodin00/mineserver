@@ -14,7 +14,7 @@ Requires a Linux machine with [Docker Engine](https://docs.docker.com/engine/ins
 curl -fsSL https://raw.githubusercontent.com/kodin00/mineserver/master/install.sh | sh
 ```
 
-This creates a `mineserver` folder, pulls the images from GHCR, and starts the panel. The installer generates a random `ADMIN_PASSWORD` and saves it in `mineserver/.env`; use that password to sign in at `http://localhost:8080`. To use a different password, set `ADMIN_PASSWORD` in `mineserver/.env` before the first start.
+This creates a `mineserver` folder, pulls the images from GHCR, and starts the panel. Sign in at `http://localhost:8080` with the default password `123456`. Change it after your first login in **Account settings**, or set your own `ADMIN_PASSWORD` in `mineserver/.env` before the first start.
 
 Worlds, backups, and panel data are saved in `/opt/mineserver`, so they survive container restarts and updates.
 
@@ -27,7 +27,7 @@ mkdir mineserver && cd mineserver
 curl -fsSLO https://raw.githubusercontent.com/kodin00/mineserver/master/compose.yaml
 curl -fsSLO https://raw.githubusercontent.com/kodin00/mineserver/master/.env.example
 cp .env.example .env
-# Edit .env and replace the example ADMIN_PASSWORD (the API refuses to start with it).
+# Optional: set your own ADMIN_PASSWORD in .env (the default is 123456).
 sudo mkdir -p /opt/mineserver
 docker compose pull
 docker compose up -d
@@ -37,7 +37,7 @@ docker compose up -d
 
 ```sh
 cp .env.example .env
-# Edit .env and replace the example ADMIN_PASSWORD (the API refuses to start with it).
+# Optional: set your own ADMIN_PASSWORD in .env (the default is 123456).
 docker compose up -d --build
 ```
 
@@ -45,7 +45,7 @@ To reach the panel from another machine, set `PANEL_BIND=0.0.0.0` in `.env` and 
 
 ## Security notes
 
-This panel can control Docker on its host. Keep it on a trusted network. It binds to `127.0.0.1` by default; set `PANEL_BIND=0.0.0.0` to open it to your LAN. For remote access, put it behind an HTTPS reverse proxy, set `COOKIE_SECURE=true`, and use a firewall or VPN. Do not expose the API service or Minecraft RCON ports directly.
+This panel can control Docker on its host. Keep it on a trusted network. It binds to `127.0.0.1` by default; set `PANEL_BIND=0.0.0.0` to open it to your LAN. For remote access, put it behind an HTTPS reverse proxy, set `COOKIE_SECURE=true`, and use a firewall or VPN. Do not expose the API service or Minecraft RCON ports directly. The default admin password (`123456`) is publicly documented, so change it in **Account settings** after your first login, especially before opening the panel beyond `127.0.0.1`.
 
 The API service runs as root in the supplied Compose configuration to access the host Docker socket and its data directory. Access to this panel grants administrative control over the Docker host.
 
@@ -53,13 +53,13 @@ The API service runs as root in the supplied Compose configuration to access the
 
 Edit `.env` before starting the panel. After changing settings, restart with `docker compose up -d`.
 
-| Setting                | Default           | What it changes                                                                         |
-| ---------------------- | ----------------- | --------------------------------------------------------------------------------------- |
-| `ADMIN_PASSWORD`       | none (required)   | Password used to sign in. At least 12 characters; the `.env.example` value is rejected. |
-| `PANEL_PORT`           | `8080`            | Port used to open the panel.                                                            |
-| `MINESERVER_DATA_ROOT` | `/opt/mineserver` | Where worlds, backups, and panel data are stored.                                       |
-| `TZ`                   | `Asia/Jakarta`    | Time zone used for scheduled backups.                                                   |
-| `COOKIE_SECURE`        | `false`           | Set to `true` when using HTTPS.                                                         |
+| Setting                | Default           | What it changes                                                            |
+| ---------------------- | ----------------- | -------------------------------------------------------------------------- |
+| `ADMIN_PASSWORD`       | `123456`          | Password used to sign in the first time. Change it after your first login. |
+| `PANEL_PORT`           | `8080`            | Port used to open the panel.                                               |
+| `MINESERVER_DATA_ROOT` | `/opt/mineserver` | Where worlds, backups, and panel data are stored.                          |
+| `TZ`                   | `Asia/Jakarta`    | Time zone used for scheduled backups.                                      |
+| `COOKIE_SECURE`        | `false`           | Set to `true` when using HTTPS.                                            |
 
 Changing `ADMIN_PASSWORD` after the first login has no effect—the password is stored in the panel database.
 

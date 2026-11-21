@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServerConfigSchema } from "@mineserver/shared";
 import * as argon2 from "@node-rs/argon2";
-import { buildApp } from "./app.js";
+import { buildApp, isTrustedProxyAddress } from "./app.js";
 import { instancePaths } from "./compose.js";
 import { config } from "./config.js";
 import { Store } from "./db.js";
@@ -309,5 +309,30 @@ describe("login timing", () => {
     expect(String(calls[0]![0])).toMatch(/^\$argon2id\$/);
     await app.close();
     store.db.close();
+  });
+});
+
+describe("trusted proxy addresses", () => {
+  it("trusts loopback and private networks only", () => {
+    for (const address of [
+      "127.0.0.1",
+      "172.18.0.5",
+      "10.1.2.3",
+      "192.168.1.10",
+      "::1",
+      "::ffff:172.18.0.5",
+      "fd00::1",
+    ]) {
+      expect(isTrustedProxyAddress(address)).toBe(true);
+    }
+    for (const address of [
+      "8.8.8.8",
+      "172.32.0.1",
+      "::ffff:8.8.8.8",
+      "2001:4860::1",
+      "not-an-ip",
+    ]) {
+      expect(isTrustedProxyAddress(address)).toBe(false);
+    }
   });
 });

@@ -7,6 +7,20 @@ interface VersionManifest {
   versions?: unknown[];
 }
 
+const MAX_SNAPSHOTS = 50;
+
+// Keep every release plus the newest snapshots, in manifest order (newest
+// first). A plain slice of the manifest is mostly snapshots and drops the
+// older releases that modded servers still need, such as 1.20.1.
+export function selectVersions(versions: unknown[]): unknown[] {
+  let snapshots = 0;
+  return versions.filter((version) => {
+    const type = (version as { type?: unknown } | null)?.type;
+    if (type === "release") return true;
+    return type === "snapshot" && snapshots++ < MAX_SNAPSHOTS;
+  });
+}
+
 async function fetchMetadata() {
   // Bounded: a hung upstream must not hold the request open indefinitely.
   const signal = AbortSignal.timeout(10_000);
@@ -28,7 +42,7 @@ async function fetchMetadata() {
   return {
     versions:
       versions.status === "fulfilled"
-        ? (versions.value.versions?.slice(0, 100) ?? [])
+        ? selectVersions(versions.value.versions ?? [])
         : [],
     imageTags: images.status === "fulfilled" ? images.value : null,
   };

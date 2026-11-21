@@ -1,3 +1,4 @@
+import { BlockList, isIPv4 } from "node:net";
 import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
@@ -32,12 +33,46 @@ declare module "fastify" {
   }
 }
 
+// Fastify 5.12.5+ ignores numeric (hop-count-only) trustProxy values, because
+// they let a direct client spoof X-Forwarded-For. Trust only the first
+// TRUST_PROXY_HOPS hops, and only when they come from a loopback or private
+// address, such as the bundled nginx on the Compose network.
+const privateNetworks = new BlockList();
+for (const [network, prefix, type] of [
+  ["127.0.0.0", 8, "ipv4"],
+  ["10.0.0.0", 8, "ipv4"],
+  ["172.16.0.0", 12, "ipv4"],
+  ["192.168.0.0", 16, "ipv4"],
+  ["169.254.0.0", 16, "ipv4"],
+  ["::1", 128, "ipv6"],
+  ["fc00::", 7, "ipv6"],
+  ["fe80::", 10, "ipv6"],
+] as const) {
+  privateNetworks.addSubnet(network, prefix, type);
+}
+
+export function isTrustedProxyAddress(address: string): boolean {
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address)?.[1];
+  const ip = mapped ?? address;
+  try {
+    return privateNetworks.check(ip, isIPv4(ip) ? "ipv4" : "ipv6");
+  } catch {
+    return false;
+  }
+}
+
+function trustProxySetting(hops: number) {
+  if (hops <= 0) return false;
+  return (address: string, hop: number) =>
+    hop < hops && isTrustedProxyAddress(address);
+}
+
 export async function buildApp(
   context: AppContext,
 ): Promise<{ app: FastifyInstance; jobs: JobRunner }> {
   const { store, docker, jobs } = context;
   const app = Fastify({
-    trustProxy: config.TRUST_PROXY_HOPS > 0 ? config.TRUST_PROXY_HOPS : false,
+    trustProxy: trustProxySetting(config.TRUST_PROXY_HOPS),
     logger: {
       level: config.NODE_ENV === "test" ? "silent" : "info",
     },

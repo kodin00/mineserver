@@ -1,18 +1,11 @@
 import { buildApp } from "./app.js";
 import { createContext } from "./startup.js";
-import { config } from "./config.js";
+import { config, DEFAULT_ADMIN_PASSWORD } from "./config.js";
 
-const KNOWN_INSECURE_PASSWORDS = [
-  "change-me-now-please",
-  // The value shipped in .env.example and documented in the README.
-  "mineserver123!",
-];
-
-if (
-  config.NODE_ENV === "production" &&
-  KNOWN_INSECURE_PASSWORDS.includes(config.ADMIN_PASSWORD)
-) {
-  throw new Error("Set a strong ADMIN_PASSWORD before starting in production");
+if (config.ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD) {
+  console.warn(
+    "ADMIN_PASSWORD is the default (123456). If you have not changed it in Account settings yet, do so after signing in.",
+  );
 }
 
 const { app, jobs } = await buildApp(await createContext());

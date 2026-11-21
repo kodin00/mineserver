@@ -24,16 +24,6 @@ curl -fsSLo .env.example "$repo_url/.env.example"
 # .env holds the admin password; keep it private to the installing user.
 chmod 600 .env
 
-# Replace the publicly documented example password with a generated one unless
-# the user already provided their own before running the installer.
-if grep -qxF 'ADMIN_PASSWORD=mineserver123!' .env; then
-  generated_password="$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')"
-  sed -i.bak "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=$generated_password|" .env
-  rm -f .env.bak
-  echo "Generated a random ADMIN_PASSWORD and wrote it to mineserver/.env."
-  echo "Sign in with it, or change it later in the panel after first login."
-fi
-
 data_root="$(grep '^MINESERVER_DATA_ROOT=' .env | cut -d= -f2- || true)"
 : "${data_root:=/opt/mineserver}"
 if [ "$(id -u)" -eq 0 ]; then
@@ -52,3 +42,8 @@ if ! docker compose up -d; then
   docker compose logs --tail=80 api >&2 || true
   exit 1
 fi
+
+echo
+echo "Mineserver is running at http://localhost:8080"
+echo "Sign in with the default password 123456 (unless you set your own ADMIN_PASSWORD in mineserver/.env)."
+echo "Change it after your first login in Account settings."
