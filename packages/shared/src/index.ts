@@ -105,7 +105,7 @@ export const ServerConfigSchema = z
     const maximum = toMiB(value.maxMemory);
     if (initial !== null && maximum !== null && initial > maximum) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["initMemory"],
         message: "Initial memory cannot exceed maximum memory",
       });
@@ -117,7 +117,7 @@ export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export const CreateServerSchema = ServerConfigSchema.and(
   z.object({
     acceptEula: z.literal(true, {
-      errorMap: () => ({ message: "You must accept the Minecraft EULA" }),
+      error: "You must accept the Minecraft EULA",
     }),
   }),
 );
